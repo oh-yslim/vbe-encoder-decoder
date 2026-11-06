@@ -49,27 +49,41 @@ const VbeCodec = (() => {
   }
 
   const markers = /#@~\^([A-Za-z0-9+/]{6}==)([\s\S]*?)([A-Za-z0-9+/]{6}==)\^#~@/g;
-  let reverseCp949 = null;
+  const reverseLegacy = new Map();
+  const cp1252Special = [
+    '€', null, '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', null, 'Ž', null,
+    null, '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', null, 'ž', 'Ÿ'
+  ];
 
   function isDbcsLead(byte, encoding) {
-    return encoding === 'euc-kr' && byte >= 0x81 && byte <= 0xfe;
+    if (encoding === 'shift_jis') return (byte >= 0x81 && byte <= 0x9f) || (byte >= 0xe0 && byte <= 0xfc);
+    if (encoding === 'euc-kr' || encoding === 'gbk' || encoding === 'big5') return byte >= 0x81 && byte <= 0xfe;
+    return false;
   }
 
-  function isDbcsTrail(byte) {
-    return (byte >= 0x41 && byte <= 0x5a) ||
+  function isDbcsTrail(byte, encoding) {
+    if (encoding === 'euc-kr') return (byte >= 0x41 && byte <= 0x5a) ||
       (byte >= 0x61 && byte <= 0x7a) || (byte >= 0x81 && byte <= 0xfe);
+    if (encoding === 'shift_jis') return (byte >= 0x40 && byte <= 0x7e) || (byte >= 0x80 && byte <= 0xfc);
+    if (encoding === 'gbk') return (byte >= 0x40 && byte <= 0x7e) || (byte >= 0x80 && byte <= 0xfe);
+    if (encoding === 'big5') return (byte >= 0x40 && byte <= 0x7e) || (byte >= 0xa1 && byte <= 0xfe);
+    return false;
   }
 
-  function requireDbcsPair(bytes, index) {
-    if (index + 1 >= bytes.length || !isDbcsTrail(bytes[index + 1])) {
-      throw new Error(`CP949 문자가 ${index + 1}번째 바이트 부근에서 잘렸거나 잘못되었습니다.`);
+  function requireDbcsPair(bytes, index, encoding) {
+    if (index + 1 >= bytes.length || !isDbcsTrail(bytes[index + 1], encoding)) {
+      throw new Error(`${encoding}의 다중 바이트 문자가 ${index + 1}번째 바이트 부근에서 손상됐습니다.`);
     }
   }
 
   function normalizeEncoding(encoding, bytes) {
     if (!encoding || encoding === 'auto') return bytes ? detectEncoding(bytes) : 'utf-8';
-    if (encoding === 'utf-8' || encoding === 'euc-kr') return encoding;
-    throw new Error('지원하지 않는 문자 인코딩입니다.');
+    if (['utf-8', 'euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252', 'utf-16le', 'utf-16be'].includes(encoding)) return encoding;
+    throw new Error(`지원하지 않는 문자 인코딩: ${encoding}`);
+  }
+
+  function isUtf16(encoding) {
+    return encoding === 'utf-16le' || encoding === 'utf-16be';
   }
 
   function binaryString(bytes) {
@@ -104,7 +118,7 @@ const VbeCodec = (() => {
     for (let index = 0; index < bytes.length; index++) {
       const byte = bytes[index];
       if (isDbcsLead(byte, encoding)) {
-        requireDbcsPair(bytes, index);
+        requireDbcsPair(bytes, index, encoding);
         index++;
       } else if (encoding === 'utf-8' && (byte & 0xc0) === 0x80) {
         continue;
@@ -115,8 +129,14 @@ const VbeCodec = (() => {
   }
 
   function encodeBytes(inputBytes, encoding = 'utf-8') {
-    const charset = normalizeEncoding(encoding, inputBytes);
     if (!(inputBytes instanceof Uint8Array)) throw new Error('바이트 데이터가 필요합니다.');
+    const charset = normalizeEncoding(encoding, inputBytes);
+    if (isUtf16(charset)) {
+      const text = decodeCharacters(inputBytes, charset);
+      const result = encodeText(text, 'utf-8');
+      result.warnings.push(`입력 파일이 ${charset}이므로 UTF-8 VBE로 변환했습니다. 구형 Windows Script Host 실행 호환성은 보장되지 않습니다.`);
+      return result;
+    }
     const input = charset === 'utf-8' && inputBytes[0] === 0xef &&
       inputBytes[1] === 0xbb && inputBytes[2] === 0xbf ? inputBytes.subarray(3) : inputBytes;
     const payload = [];
@@ -126,7 +146,7 @@ const VbeCodec = (() => {
     for (let pos = 0; pos < input.length; pos++) {
       let byte = input[pos];
       if (isDbcsLead(byte, charset)) {
-        requireDbcsPair(input, pos);
+        requireDbcsPair(input, pos, charset);
         payload.push(byte, input[++pos]);
         continue;
       }
@@ -159,7 +179,7 @@ const VbeCodec = (() => {
     for (let pos = 0; pos < bytes.length; pos++) {
       let byte = bytes[pos];
       if (isDbcsLead(byte, charset)) {
-        requireDbcsPair(bytes, pos);
+        requireDbcsPair(bytes, pos, charset);
         output.push(byte, bytes[++pos]);
         continue;
       }
@@ -186,7 +206,15 @@ const VbeCodec = (() => {
       throw new Error('VBE 데이터를 입력하세요.');
     }
     const charset = normalizeEncoding(encoding, source);
-    const original = binaryString(source);
+    if (isUtf16(charset)) {
+      const text = decodeCharacters(source, charset);
+      const result = decodeText(text, 'utf-8');
+      result.warnings.push(`${charset} VBE 텍스트를 UTF-8로 변환해 처리했습니다.`);
+      return result;
+    }
+    const actualSource = charset === 'utf-8' && source.length >= 3 && source[0] === 0xef &&
+      source[1] === 0xbb && source[2] === 0xbf ? source.subarray(3) : source;
+    const original = binaryString(actualSource);
     let count = 0;
     const warnings = [];
     markers.lastIndex = 0;
@@ -214,55 +242,100 @@ const VbeCodec = (() => {
   }
 
   function detectEncoding(bytes) {
+    if (bytes.length >= 2) {
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+      if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+    }
+    if (bytes.length >= 4) {
+      let odd = 0;
+      let even = 0;
+      const sample = Math.min(bytes.length, 256);
+      for (let i = 0; i < sample; i++) {
+        if (bytes[i] === 0) { if (i & 1) odd++; else even++; }
+      }
+      if (odd >= 3 && odd >= 3 * (even + 1)) return 'utf-16le';
+      if (even >= 3 && even >= 3 * (odd + 1)) return 'utf-16be';
+    }
     try {
       new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       return 'utf-8';
     } catch {
+      // Legacy encodings cannot be reliably distinguished from raw bytes alone.
       return 'euc-kr';
     }
   }
 
   function decodeCharacters(bytes, charset) {
+    if (charset === 'windows-1252') return Array.from(bytes, byte => {
+      if (byte >= 0x80 && byte <= 0x9f) return cp1252Special[byte - 0x80] || String.fromCharCode(byte);
+      return String.fromCharCode(byte);
+    }).join('');
     try {
       return new TextDecoder(charset, { fatal: true }).decode(bytes);
     } catch {
-      return new TextDecoder(charset).decode(bytes);
+      throw new Error(`${charset}로 해석할 수 없는 바이트가 있습니다. 원본 파일의 인코딩을 수동 선택하세요.`);
     }
   }
 
-  function buildCp949Map() {
-    if (reverseCp949) return reverseCp949;
+  function buildLegacyMap(encoding) {
+    if (reverseLegacy.has(encoding)) return reverseLegacy.get(encoding);
     const reverse = new Map();
-    const decoder = new TextDecoder('euc-kr', { fatal: true });
-    for (let lead = 0x81; lead <= 0xfe; lead++) {
-      for (let trail = 0x41; trail <= 0xfe; trail++) {
-        if (!isDbcsTrail(trail)) continue;
-        try {
-          const character = decoder.decode(Uint8Array.of(lead, trail));
-          if (character.length === 1 && !reverse.has(character)) {
-            reverse.set(character, [lead, trail]);
+    if (encoding === 'windows-1252') {
+      for (let byte = 0x80; byte <= 0xff; byte++) {
+        const character = byte <= 0x9f ? (cp1252Special[byte - 0x80] || String.fromCharCode(byte)) : String.fromCharCode(byte);
+        reverse.set(character, [byte]);
+      }
+      reverseLegacy.set(encoding, reverse);
+      return reverse;
+    }
+    const decoder = new TextDecoder(encoding, { fatal: true });
+    for (let byte = 0x80; byte <= 0xff; byte++) {
+      if (isDbcsLead(byte, encoding)) {
+        for (let trail = 0x40; trail <= 0xfe; trail++) {
+          if (!isDbcsTrail(trail, encoding)) continue;
+          try {
+            const character = decoder.decode(Uint8Array.of(byte, trail));
+            if (Array.from(character).length === 1 && !reverse.has(character)) {
+              reverse.set(character, [byte, trail]);
+            }
+          } catch {
+            // Ignore invalid code-page byte pairs.
           }
+        }
+      } else {
+        try {
+          const character = decoder.decode(Uint8Array.of(byte));
+          if (Array.from(character).length === 1 && !reverse.has(character)) reverse.set(character, [byte]);
         } catch {
-          // Ignore pairs not mapped by the browser's CP949 decoder.
+          // Ignore unmappable single-byte values.
         }
       }
     }
-    reverseCp949 = reverse;
+    reverseLegacy.set(encoding, reverse);
     return reverse;
   }
 
   function encodeCharacters(text, encoding) {
     if (encoding === 'utf-8') return new TextEncoder().encode(text);
-    const reverse = buildCp949Map();
+    if (isUtf16(encoding)) {
+      const bytes = [];
+      const little = encoding === 'utf-16le';
+      for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (little) bytes.push(code & 255, code >>> 8);
+        else bytes.push(code >>> 8, code & 255);
+      }
+      return Uint8Array.from(bytes);
+    }
+    const reverse = buildLegacyMap(encoding);
     const output = [];
     for (const character of text) {
       const code = character.codePointAt(0);
-      if (code < 128) {
-        output.push(code);
-      } else {
-        const pair = reverse.get(character);
-        if (!pair) throw new Error(`CP949로 표현할 수 없는 문자: ${JSON.stringify(character)}`);
-        output.push(...pair);
+      if (code < 128) output.push(code);
+      else {
+        const bytes = reverse.get(character);
+        if (!bytes) throw new Error(`${encoding}로 표현할 수 없는 문자: ${JSON.stringify(character)}. UTF-8을 선택해야 할 수 있습니다.`);
+        output.push(...bytes);
       }
     }
     return Uint8Array.from(output);
@@ -271,12 +344,14 @@ const VbeCodec = (() => {
   function encodeText(text, encoding = 'utf-8') {
     if (typeof text !== 'string') throw new Error('문자열을 입력하세요.');
     const charset = normalizeEncoding(encoding);
+    if (isUtf16(charset)) throw new Error('텍스트 입력의 UTF-16은 파일로 저장해 업로드하세요. 웹 변환은 UTF-8을 권장합니다.');
     return encodeBytes(encodeCharacters(text, charset), charset);
   }
 
   function decodeText(text, encoding = 'utf-8') {
     if (typeof text !== 'string') throw new Error('문자열을 입력하세요.');
     const charset = normalizeEncoding(encoding);
+    if (isUtf16(charset)) throw new Error('텍스트 입력에서는 UTF-8 또는 원래의 Windows 코드페이지를 선택하세요.');
     return decodeBytes(encodeCharacters(text, charset), charset);
   }
 

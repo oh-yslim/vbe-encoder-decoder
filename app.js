@@ -13,6 +13,8 @@
   let fileName = 'script';
   let result = null;
   let lastMode = 'decode';
+  const charsetNames = { 'utf-8': 'UTF-8', 'euc-kr': 'CP949', 'shift_jis': 'CP932/Shift-JIS', 'gbk': 'CP936/GBK', 'big5': 'CP950/Big5', 'windows-1252': 'CP1252', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE' };
+  const charsetName = (value) => charsetNames[value] || value;
 
   function setStatus(text, error = false) {
     message.textContent = text;
@@ -36,9 +38,14 @@
   function updateFilePreview() {
     if (!fileBytes) return;
     const charset = selectedEncoding();
-    input.value = VbeCodec.decodeCharacters(fileBytes, charset);
     resetResult();
-    setStatus(`파일을 읽었습니다. 문자 인코딩: ${charset === 'euc-kr' ? 'CP949' : 'UTF-8'}`);
+    try {
+      input.value = VbeCodec.decodeCharacters(fileBytes, charset);
+      setStatus(`파일을 읽었습니다. 문자 인코딩: ${charsetName(charset)}. 인식이 잘못됐다면 직접 변경하세요.`);
+    } catch (error) {
+      input.value = '';
+      setStatus(`선택한 인코딩으로 파일을 표시할 수 없습니다: ${error.message}`, true);
+    }
   }
 
   upload.addEventListener('change', async () => {
@@ -85,7 +92,7 @@
       element('download').disabled = false;
       const ext = mode === 'encode' ? '.vbe' : '.vbs';
       element('download').textContent = `${ext} 다운로드`;
-      const charsetLabel = charset === 'euc-kr' ? 'CP949' : 'UTF-8';
+      const charsetLabel = charsetName(result.encoding);
       setStatus(mode === 'encode'
         ? `VBE 인코딩 완료 (${charsetLabel})`
         : `${result.blockCount}개 VBE 블록 디코딩 완료 (${charsetLabel})`);
@@ -124,7 +131,7 @@
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus(`${ext} 파일 저장을 시작했습니다. 문자 인코딩은 ${result.encoding === 'euc-kr' ? 'CP949' : 'UTF-8'}입니다.`);
+    setStatus(`${ext} 파일 저장을 시작했습니다. 문자 인코딩은 ${charsetName(result.encoding)}입니다.`);
   });
 
   element('clear').addEventListener('click', () => {
@@ -152,5 +159,9 @@
   element('sampleEncoded').addEventListener('click', () => {
     setSample('#@~^DgAAAA==\\ko$K6,JC\x7fV^GJqAQAAA==^#~@', 'example');
     setStatus('VBE 예제를 불러왔습니다. Decode 버튼을 누르세요.');
+  });
+  element('sampleUnicode').addEventListener('click', () => {
+    setSample('Option Explicit\r\nWScript.Echo "한글 日本語 简体中文 繁體中文 Café Ελληνικά Русский 😀 🚀 ∑ ∞"\r\n', 'unicode-test');
+    setStatus('다국어 원문을 불러왔습니다. UTF-8 Encode 후 결과를 Decode하세요. 레거시 Windows 실행 호환성과는 별개입니다.');
   });
 })();

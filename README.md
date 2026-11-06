@@ -1,47 +1,55 @@
-# VBE Codec (Encoder & Decoder)
+# VBE Codec v3.0.0 — Encoder & Decoder
 
-A dependency-free, client-side Microsoft Script Encoder (`.vbe`) encoder and decoder. **Not encryption.**
+Standalone, client-side VBE codec compatible with the Microsoft Script Encoder substitution format. **VBE is obfuscation, not encryption.** The app does not execute scripts or upload their contents to a server.
 
-## Features
+## What's new
 
-- Encode VBScript text or `.vbs` files into `.vbe` blocks.
-- Decode one or multiple `.vbe` blocks, including surrounding unencoded text.
-- File uploads are handled locally in the browser; no data is transmitted to a server.
-- Handles UTF-8 and CP949 (Windows Korean) input, with auto-detection for files.
-- Preserves original file bytes and line endings for file conversion (except optional UTF-8 BOM removal on encoding).
-- Download actual UTF-8 or CP949 bytes, rather than replacing them with UTF-8.
-- Shows VBE header-length/checksum validation warnings on decoding.
-- No third-party scripts, libraries, external network APIs, backend or build tools.
+- Encoding and decoding with local byte-preserving file input.
+- An explicit choice of UTF-8, CP949/EUC-KR, CP932/Shift-JIS, CP936/GBK, CP950/Big5, and Windows-1252; decoding of UTF-16LE/UTF-16BE BOM files via text transcoding to UTF-8.
+- Rejects incorrectly decoded Unicode instead of silently outputting replacement characters.
+- Multi-block decoding, checksum and payload-length warnings, downloads, and Unicode demo.
+- 21 regression tests, including real Unicode-rich VBScript fixtures, and a GitHub Actions **test-only** workflow.
 
-## Deploy on GitHub Pages (GitHub Free)
+## GitHub Pages deployment
 
-1. Create a **public** repository named `vbe-codec`, or rename your existing repository at **Settings > General > Repository name**.
-2. Upload **the extracted contents**, not the ZIP itself, to the root of the `main` branch: `index.html`, `style.css`, `codec.js`, `app.js`, `.nojekyll`, and `README.md`.
-3. Open **Settings > Pages > Build and deployment**.
-4. Choose **Deploy from a branch**, then `main` and `/(root)`, and click **Save**.
-5. Visit `https://YOUR-USERNAME.github.io/vbe-codec/` once GitHub Pages has finished publishing.
+Use a **public** repository named `vbe-codec` on GitHub Free.
 
-**Upgrading from v1:** delete the obsolete `decoder.js` if it exists, and replace `index.html`, `app.js`, and `style.css`. Add `codec.js` in the repository root. On a renamed repository, update old site links, because GitHub does not redirect project Pages URLs automatically.
+1. Replace `index.html`, `app.js`, `codec.js`, `style.css`, and `README.md`; include `.nojekyll`, `.github/workflows/test.yml`, `tests/test.js`, and `test-samples/`.
+2. Remove the obsolete `decoder.js` from v1 if it still exists. The v3 sources do not depend on it.
+3. `Settings > Pages > Build and deployment`: set `Source = Deploy from a branch`, `Branch = main`, `Folder = /(root)`.
+4. Make the changes in **one commit** with https://github.dev/ (press `.` on your repository) or Git locally. GitHub's basic upload page does not conveniently stage deletions with uploads.
+5. The site's URL is `https://USERNAME.github.io/vbe-codec/`.
 
-## Running offline
+**The Actions workflow runs tests only, and does not gate GitHub Pages deployments.** To prevent publishing failing commits, later switch to an Actions deployment workflow that depends on the test job (or use a protected branch with required test checks and pull requests).
 
-Open `index.html` directly in a modern browser. The site requires browser APIs `TextEncoder`, `TextDecoder`, `Blob` and `atob`/`btoa`.
+## Unicode and legacy encoding caution
 
-## Encoding and limitations
+VBE is a historical **byte-oriented** obfuscation format. Passing UTF-8 multilingual and emoji roundtrip tests in this web application **does not mean Windows Script Host will run those `.vbe` files**. Legacy Windows Script Host commonly depends on the system's ANSI code page. CP949, Shift-JIS, GBK, and Big5 each represent only subsets of Unicode; emoji often cannot be represented at all. For legacy execution, prefer the actual code page of the original script, and use `Unicode_Runtime_ASCII_Source.vbs` for a portable ASCII-source test.
 
-- The browser's `TextEncoder` writes UTF-8. For CP949 text entered via paste, this project builds a reversible code-page mapping using `TextDecoder('euc-kr')` and refuses unmappable characters rather than silently replacing them.
-- Files are transformed at the original byte level. CP949 DBCS pairs are preserved as a unit. UTF-8 continuation bytes are not transformed.
-- Auto-detection of file encoding prefers valid UTF-8 and otherwise tries CP949. This is a heuristic; choose CP949 manually if the preview or output looks incorrect.
-- Browser textareas may normalize pasted line endings to LF. **For byte-exact CRLF handling, upload a file** rather than pasting text.
-- The historical Windows Script Host/Script Encoder may not accept UTF-8 output containing non-ASCII characters. Select CP949 for legacy Korean Windows VBE files.
-- Non-ASCII legacy encodings other than CP949 are not implemented. Encrypted files are not supported.
-- Input size is limited by the UI to 10 MiB. The decoder handles multi-block data but is not a VBScript interpreter.
-- Decoded code is never executed; review any recovered code before running it elsewhere.
+`Unicode_Stress_Test_UTF8.vbs` contains real Unicode string literals with UTF-8 BOM. `Unicode_Stress_Test_UTF16LE.vbs` contains the same source encoded in UTF-16LE with BOM. The UTF-16 input file is **transcoded to UTF-8** by the codec; this preserves characters but not original bytes. The original UTF-8 BOM is removed when encoding. Windows Script Host execution compatibility is distinct from codec roundtrip correctness.
 
-## Tests
+**Do not rely on Auto detection for existing East Asian VBE files.** It checks BOM and UTF-8 validity; when bytes do not form valid UTF-8 it defaults to CP949 as a heuristic. If the original file was produced on a Japanese or Chinese system, choose CP932, CP936, or CP950 explicitly. For copied text, select the original code page if known. Bad code-page selection can produce incorrect text even if the file passes checksum validation. Correctly reconstructing an unknown legacy script encoding cannot be guaranteed from an encoded byte stream alone.
 
-Run `node tests/test.js` to test the underlying encoder and decoder without installing dependencies. A public VBE sample from Didier Stevens is included in the tests.
+Text areas may normalize line endings. Prefer file upload and download for exact CRLF byte comparisons.
 
-## Attribution
+## Regression tests
 
-VBE substitution/selector format tables were checked against [Didier Stevens's public-domain decoder](https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py). This is a standalone implementation and is not a fork of `61106960/VBE-Decoder`.
+```sh
+node --test tests/test.js
+```
+
+The project includes:
+
+- `test-samples/Unicode_Stress_Test_UTF8.vbs` — UTF-8 BOM source with Hangul, Japanese, simplified/traditional Chinese, Latin diacritics, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Thai, emoji, combining marks, mathematical symbols, 64-character selector rollover, and escape sequences.
+- `test-samples/Unicode_Stress_Test_UTF16LE.vbs` — the same source in UTF-16LE with BOM.
+- `test-samples/Korean_CP949_Test.vbs` — Windows Korean CP949 bytes.
+- `test-samples/Unicode_Runtime_ASCII_Source.vbs` — ASCII-only VBScript source that builds Unicode text using `ChrW` (including an emoji surrogate pair).
+- Matching `.vbe` files for the UTF-8, CP949, and ASCII-only fixtures, ready for direct Decode tests.
+
+The tests are **roundtrip and format-vector tests**, not an independent compatibility certification with the original `screnc.exe`/Windows Script Host. Actual third-party VBE samples are needed to diagnose any remaining errors reported by a user.
+
+## References
+
+The substitution tables are checked against the public-domain decoder by Didier Stevens: https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py
+
+This project is an independent implementation, not a fork of `61106960/VBE-Decoder`.

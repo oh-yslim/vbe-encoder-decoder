@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="브라우저에서만 작동하는 VBE 인코더·디코더. 파일 및 텍스트 변환, UTF-8·CP949 지원.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=2.0.0">
-  <script src="./codec.js?v=2.0.0" defer></script>
-  <script src="./app.js?v=2.0.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.0.0">
+  <script src="./codec.js?v=3.0.0" defer></script>
+  <script src="./app.js?v=3.0.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -25,6 +25,7 @@
         <div class="sample-group">
           <button type="button" class="text-button" id="samplePlain">원문 예제</button>
           <button type="button" class="text-button" id="sampleEncoded">VBE 예제</button>
+          <button type="button" class="text-button" id="sampleUnicode">다국어 예제</button>
         </div>
       </div>
       <div class="controls">
@@ -33,9 +34,15 @@
         </label>
         <label class="select-wrap">문자 인코딩
           <select id="encoding">
-            <option value="auto">자동 (UTF-8 우선, CP949 대체)</option>
-            <option value="utf-8">UTF-8</option>
+            <option value="auto">자동 (UTF-8 우선, 다른 코드는 수동 선택)</option>
+            <option value="utf-8">UTF-8 (전체 Unicode, 레거시 실행 주의)</option>
             <option value="euc-kr">CP949 (한국어 Windows)</option>
+            <option value="shift_jis">CP932 / Shift-JIS (일본어 Windows)</option>
+            <option value="gbk">CP936 / GBK (간체 중국어 Windows)</option>
+            <option value="big5">CP950 / Big5 (번체 중국어 Windows)</option>
+            <option value="windows-1252">CP1252 (서유럽 Windows)</option>
+            <option value="utf-16le">UTF-16 LE (파일 입력)</option>
+            <option value="utf-16be">UTF-16 BE (파일 입력)</option>
           </select>
         </label>
       </div>
@@ -61,8 +68,8 @@
     </section>
 
     <footer>VBE는 암호화가 아닌 난독화입니다. 신뢰하지 않는 스크립트를 실행하지 마세요.
-      <p>한글 스크립트를 Windows Script Host에서 실행하려는 경우 CP949를 우선 검토하세요. UTF-8 VBE 파일의 호환성은 실행 환경에 따라 다를 수 있습니다.</p>
-      <p>v2.0.0 · 변환은 현재 브라우저에서만 수행됩니다.</p>
+      <p>VBE는 레거시 바이트 지향 형식입니다. UTF-8/이모지 왕복 테스트가 성공하더라도 Windows Script Host에서 실제 실행 가능하다는 뜻은 아닙니다. 한국 Windows 실행용은 CP949 등 원래 코드페이지를 선택하세요.</p>
+      <p>v3.0.0 · 변환은 현재 브라우저에서만 수행됩니다.</p>
     </footer>
   </main>
 </body>
