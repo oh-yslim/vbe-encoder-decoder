@@ -1,75 +1,78 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="브라우저에서만 작동하는 VBE 인코더·디코더. 파일 및 텍스트 변환, UTF-8·CP949 지원.">
+  <meta name="description" content="Offline-first, browser-based VBE encoder and decoder with Unicode-aware options.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.0.0">
-  <script src="./codec.js?v=3.0.0" defer></script>
-  <script src="./app.js?v=3.0.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.1.0">
+  <script src="./codec.js?v=3.1.0" defer></script>
+  <script src="./app.js?v=3.1.0" defer></script>
 </head>
 <body>
   <main class="wrap">
     <header class="hero">
       <div class="eyebrow">100% CLIENT-SIDE · NO EXTERNAL DEPENDENCIES</div>
       <h1>VBE Codec</h1>
-      <p>Microsoft Script Encoder 형식의 <code>.vbs</code> ↔ <code>.vbe</code> 양방향 변환</p>
-      <div class="privacy">✓ 파일 업로드 없음 &nbsp; ✓ 별도 서버 없음 &nbsp; ✓ 스크립트 실행 없음</div>
+      <p>Encode and decode Microsoft Script Encoder <code>.vbs</code> and <code>.vbe</code> files.</p>
+      <div class="privacy">✓ No file uploads to servers &nbsp; ✓ No backend &nbsp; ✓ No script execution</div>
     </header>
 
     <section class="panel" aria-labelledby="sourceTitle">
       <div class="section-heading">
-        <h2 id="sourceTitle">1. 변환할 내용</h2>
+        <h2 id="sourceTitle">1. Source</h2>
         <div class="sample-group">
-          <button type="button" class="text-button" id="samplePlain">원문 예제</button>
-          <button type="button" class="text-button" id="sampleEncoded">VBE 예제</button>
-          <button type="button" class="text-button" id="sampleUnicode">다국어 예제</button>
+          <button type="button" class="text-button" id="samplePlain">Plain sample</button>
+          <button type="button" class="text-button" id="sampleEncoded">VBE sample</button>
+          <button type="button" class="text-button" id="sampleUnicode">Unicode sample</button>
         </div>
       </div>
       <div class="controls">
-        <label class="file-picker">파일 선택
+        <label class="file-picker">Choose file
           <input id="upload" type="file" accept=".vbs,.vbe,.jse,.js,.txt,text/plain">
         </label>
-        <label class="select-wrap">문자 인코딩
+        <label class="select-wrap">Text encoding
           <select id="encoding">
-            <option value="auto">자동 (UTF-8 우선, 다른 코드는 수동 선택)</option>
-            <option value="utf-8">UTF-8 (전체 Unicode, 레거시 실행 주의)</option>
-            <option value="euc-kr">CP949 (한국어 Windows)</option>
-            <option value="shift_jis">CP932 / Shift-JIS (일본어 Windows)</option>
-            <option value="gbk">CP936 / GBK (간체 중국어 Windows)</option>
-            <option value="big5">CP950 / Big5 (번체 중국어 Windows)</option>
-            <option value="windows-1252">CP1252 (서유럽 Windows)</option>
-            <option value="utf-16le">UTF-16 LE (파일 입력)</option>
-            <option value="utf-16be">UTF-16 BE (파일 입력)</option>
+            <option value="auto">Auto (UTF-8 first; manually select legacy encodings)</option>
+            <option value="utf-8">UTF-8 (full Unicode; not necessarily WSH-compatible)</option>
+            <option value="euc-kr">CP949 / Korean Windows</option>
+            <option value="shift_jis">CP932 / Shift-JIS / Japanese Windows</option>
+            <option value="gbk">CP936 / GBK / Simplified Chinese Windows</option>
+            <option value="big5">CP950 / Big5 / Traditional Chinese Windows</option>
+            <option value="windows-1252">CP1252 / Western European Windows</option>
+            <option value="utf-16le">UTF-16 LE (file input)</option>
+            <option value="utf-16be">UTF-16 BE (file input)</option>
           </select>
         </label>
       </div>
-      <p class="muted help">파일 선택 시 원본 바이트를 직접 변환합니다. 붙여넣기는 선택한 문자 인코딩으로 변환합니다.</p>
-      <label for="input" class="field-label">또는 텍스트 붙여넣기</label>
-      <textarea id="input" spellcheck="false" placeholder="VBScript 원문 또는 #@~^...^#~@ VBE 데이터를 입력하세요."></textarea>
+      <p class="muted help">File input preserves original bytes. Pasted text is encoded using the selected character set. Automatic legacy encoding detection is not reliable.</p>
+      <label for="input" class="field-label">Or paste text</label>
+      <textarea id="input" spellcheck="false" translate="no" placeholder="Paste VBScript source or #@~^...^#~@ VBE content."></textarea>
       <div class="actions">
-        <button type="button" id="encode" class="primary">Encode → .vbe</button>
+        <button type="button" id="encode" class="primary">Encode (raw) → .vbe</button>
+        <button type="button" id="encodeSafe" class="primary">Encode (WSH-safe) → .vbe</button>
         <button type="button" id="decode" class="secondary">Decode → .vbs</button>
-        <button type="button" id="clear">초기화</button>
+        <button type="button" id="clear">Clear</button>
       </div>
+      <p class="muted help"><strong>WSH-safe encode</strong> converts non-ASCII characters inside VBScript quoted string literals into <code>ChrW(&amp;HXXXX)</code> expressions before encoding. Non-ASCII outside quoted strings is rejected to avoid silent changes. This does not validate all VBScript syntax.</p>
     </section>
 
     <section class="panel" aria-labelledby="resultTitle">
-      <div class="section-heading"><h2 id="resultTitle">2. 변환 결과</h2><span class="muted">원문은 실행되지 않습니다</span></div>
-      <textarea id="output" aria-label="변환 결과" readonly spellcheck="false" placeholder="변환 결과가 여기에 표시됩니다."></textarea>
+      <div class="section-heading"><h2 id="resultTitle">2. Result</h2><span class="muted">Scripts are never executed</span></div>
+      <textarea id="output" aria-label="Conversion result" readonly spellcheck="false" translate="no" placeholder="The converted result appears here."></textarea>
       <div class="actions">
-        <button type="button" id="copy" disabled>결과 복사</button>
-        <button type="button" id="download" disabled>파일 다운로드</button>
+        <button type="button" id="copy" disabled>Copy result</button>
+        <button type="button" id="download" disabled>Download file</button>
       </div>
-      <p id="message" role="status" aria-live="polite">Encode 또는 Decode를 선택하세요.</p>
+      <p id="message" role="status" aria-live="polite">Choose Encode or Decode.</p>
       <p id="details" class="muted" aria-live="polite"></p>
     </section>
 
-    <footer>VBE는 암호화가 아닌 난독화입니다. 신뢰하지 않는 스크립트를 실행하지 마세요.
-      <p>VBE는 레거시 바이트 지향 형식입니다. UTF-8/이모지 왕복 테스트가 성공하더라도 Windows Script Host에서 실제 실행 가능하다는 뜻은 아닙니다. 한국 Windows 실행용은 CP949 등 원래 코드페이지를 선택하세요.</p>
-      <p>v3.0.0 · 변환은 현재 브라우저에서만 수행됩니다.</p>
+    <footer>
+      VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
+      <p>Raw UTF-8 Unicode roundtrips do not prove Windows Script Host compatibility. Legacy code pages cannot represent every Unicode character. WSH-safe encoding generates ASCII-only source, including <code>ChrW</code> expressions for Unicode string literals. Console fonts and output code pages may still affect display.</p>
+      <p>v3.1.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

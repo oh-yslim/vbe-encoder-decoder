@@ -1,4 +1,4 @@
-# VBE Codec v3.0.0 — Encoder & Decoder
+# VBE Codec v3.1.0 — Encoder & Decoder
 
 Standalone, client-side VBE codec compatible with the Microsoft Script Encoder substitution format. **VBE is obfuscation, not encryption.** The app does not execute scripts or upload their contents to a server.
 
@@ -8,13 +8,13 @@ Standalone, client-side VBE codec compatible with the Microsoft Script Encoder s
 - An explicit choice of UTF-8, CP949/EUC-KR, CP932/Shift-JIS, CP936/GBK, CP950/Big5, and Windows-1252; decoding of UTF-16LE/UTF-16BE BOM files via text transcoding to UTF-8.
 - Rejects incorrectly decoded Unicode instead of silently outputting replacement characters.
 - Multi-block decoding, checksum and payload-length warnings, downloads, and Unicode demo.
-- 21 regression tests, including real Unicode-rich VBScript fixtures, and a GitHub Actions **test-only** workflow.
+- 28+ regression tests, including real Unicode-rich VBScript fixtures, and a GitHub Actions **test-only** workflow.
 
 ## GitHub Pages deployment
 
 Use a **public** repository named `vbe-codec` on GitHub Free.
 
-1. Replace `index.html`, `app.js`, `codec.js`, `style.css`, and `README.md`; include `.nojekyll`, `.github/workflows/test.yml`, `tests/test.js`, and `test-samples/`.
+1. Replace `index.html`, `app.js`, `codec.js`, `style.css`, and `README.md`; include `.nojekyll`, `.github/workflows/test.yml`, `tests/*.js`, and `test-samples/`.
 2. Remove the obsolete `decoder.js` from v1 if it still exists. The v3 sources do not depend on it.
 3. `Settings > Pages > Build and deployment`: set `Source = Deploy from a branch`, `Branch = main`, `Folder = /(root)`.
 4. Make the changes in **one commit** with https://github.dev/ (press `.` on your repository) or Git locally. GitHub's basic upload page does not conveniently stage deletions with uploads.
@@ -35,7 +35,7 @@ Text areas may normalize line endings. Prefer file upload and download for exact
 ## Regression tests
 
 ```sh
-node --test tests/test.js
+node --test tests/*.js
 ```
 
 The project includes:
@@ -53,3 +53,12 @@ The tests are **roundtrip and format-vector tests**, not an independent compatib
 The substitution tables are checked against the public-domain decoder by Didier Stevens: https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py
 
 This project is an independent implementation, not a fork of `61106960/VBE-Decoder`.
+
+## v3.1 updates
+
+- Every UI message, option, validation warning, and placeholder is English; HTML `lang` is `en`.
+- Decode now uses a character-level PowerShell-compatible algorithm and displays warnings from a parallel strict-byte comparison.
+- Optional **Encode (WSH-safe)** rewrites Unicode characters **inside double-quoted VBScript string literals** as `ChrW(&HXXXX)` calls before encoding ASCII source. Emoji become surrogate-pair calls.
+- Non-ASCII outside string literals is rejected to prevent silent source changes. WSH-safe mode is not a VBScript parser or an execution certification.
+- Raw UTF-8 data roundtrip may succeed but WSH may not run the encoded Unicode-literal script.
+- Windows execution has not been verified in this Linux environment. Confirm on the actual Windows host.

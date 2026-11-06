@@ -49,6 +49,7 @@ const VbeCodec = (() => {
   }
 
   const markers = /#@~\^([A-Za-z0-9+/]{6}==)([\s\S]*?)([A-Za-z0-9+/]{6}==)\^#~@/g;
+  const compatibleMarkers = /#@~\^.{6}==([\s\S]*?).{6}==\^#~@/g;
   const reverseLegacy = new Map();
   const cp1252Special = [
     '€', null, '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', null, 'Ž', null,
@@ -72,14 +73,14 @@ const VbeCodec = (() => {
 
   function requireDbcsPair(bytes, index, encoding) {
     if (index + 1 >= bytes.length || !isDbcsTrail(bytes[index + 1], encoding)) {
-      throw new Error(`${encoding}의 다중 바이트 문자가 ${index + 1}번째 바이트 부근에서 손상됐습니다.`);
+      throw new Error(`Truncated or invalid ${encoding} multibyte sequence near byte ${index + 1}.`);
     }
   }
 
   function normalizeEncoding(encoding, bytes) {
     if (!encoding || encoding === 'auto') return bytes ? detectEncoding(bytes) : 'utf-8';
     if (['utf-8', 'euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252', 'utf-16le', 'utf-16be'].includes(encoding)) return encoding;
-    throw new Error(`지원하지 않는 문자 인코딩: ${encoding}`);
+    throw new Error(`Unsupported text encoding: ${encoding}`);
   }
 
   function isUtf16(encoding) {
@@ -108,7 +109,7 @@ const VbeCodec = (() => {
 
   function base64ToInt(value) {
     const decoded = atob(value);
-    if (decoded.length !== 4) throw new Error('VBE 메타데이터(Base64)가 잘못되었습니다.');
+    if (decoded.length !== 4) throw new Error('Invalid VBE Base64 metadata.');
     return (decoded.charCodeAt(0) | (decoded.charCodeAt(1) << 8) |
       (decoded.charCodeAt(2) << 16) | (decoded.charCodeAt(3) << 24)) >>> 0;
   }
@@ -129,12 +130,12 @@ const VbeCodec = (() => {
   }
 
   function encodeBytes(inputBytes, encoding = 'utf-8') {
-    if (!(inputBytes instanceof Uint8Array)) throw new Error('바이트 데이터가 필요합니다.');
+    if (!(inputBytes instanceof Uint8Array)) throw new Error('Byte input is required.');
     const charset = normalizeEncoding(encoding, inputBytes);
     if (isUtf16(charset)) {
       const text = decodeCharacters(inputBytes, charset);
       const result = encodeText(text, 'utf-8');
-      result.warnings.push(`입력 파일이 ${charset}이므로 UTF-8 VBE로 변환했습니다. 구형 Windows Script Host 실행 호환성은 보장되지 않습니다.`);
+      result.warnings.push(`Input was ${charset} and was converted to UTF-8 VBE. Legacy Windows Script Host compatibility is not guaranteed.`);
       return result;
     }
     const input = charset === 'utf-8' && inputBytes[0] === 0xef &&
@@ -186,7 +187,7 @@ const VbeCodec = (() => {
       if (byte === 64) {
         if (pos + 1 >= bytes.length ||
             !Object.prototype.hasOwnProperty.call(escapeToByte, bytes[pos + 1])) {
-          throw new Error(`VBE 이스케이프가 ${pos + 1}번째 바이트 부근에서 잘못되었습니다.`);
+          throw new Error(`Invalid VBE escape near byte ${pos + 1}.`);
         }
         byte = escapeToByte[bytes[++pos]];
       } else if (byte < 128 && transformable(byte)) {
@@ -203,13 +204,13 @@ const VbeCodec = (() => {
 
   function decodeBytes(source, encoding = 'auto') {
     if (!(source instanceof Uint8Array) || !source.length) {
-      throw new Error('VBE 데이터를 입력하세요.');
+      throw new Error('Enter VBE data.');
     }
     const charset = normalizeEncoding(encoding, source);
     if (isUtf16(charset)) {
       const text = decodeCharacters(source, charset);
       const result = decodeText(text, 'utf-8');
-      result.warnings.push(`${charset} VBE 텍스트를 UTF-8로 변환해 처리했습니다.`);
+      result.warnings.push(`${charset} VBE text was transcoded to UTF-8.`);
       return result;
     }
     const actualSource = charset === 'utf-8' && source.length >= 3 && source[0] === 0xef &&
@@ -226,15 +227,15 @@ const VbeCodec = (() => {
       const declaredChecksum = base64ToInt(check);
       const actualUnits = encodedUnitCount(bytes, charset);
       if (declaredUnits !== actualUnits) {
-        warnings.push(`블록 ${count}: 길이 불일치 (헤더 ${declaredUnits}, 실제 ${actualUnits})`);
+        warnings.push(`Block ${count}: encoded length mismatch (declared ${declaredUnits}, actual ${actualUnits})`);
       }
       if (declaredChecksum !== result.checksum) {
-        warnings.push(`블록 ${count}: 체크섬 불일치 (헤더 ${declaredChecksum}, 실제 ${result.checksum})`);
+        warnings.push(`Block ${count}: checksum mismatch (declared ${declaredChecksum}, actual ${result.checksum})`);
       }
       return binaryString(result.bytes);
     });
     if (count === 0) {
-      throw new Error('유효한 VBE 블록(#@~^...^#~@)을 찾지 못했습니다. 파일 형식과 마커를 확인하세요.');
+      throw new Error('No valid VBE block (#@~^...^#~@) was found. Check the format and markers.');
     }
     const resultBytes = binaryBytes(decoded);
     return { bytes: resultBytes, text: decodeCharacters(resultBytes, charset), encoding: charset,
@@ -273,7 +274,7 @@ const VbeCodec = (() => {
     try {
       return new TextDecoder(charset, { fatal: true }).decode(bytes);
     } catch {
-      throw new Error(`${charset}로 해석할 수 없는 바이트가 있습니다. 원본 파일의 인코딩을 수동 선택하세요.`);
+      throw new Error(`Some bytes cannot be decoded as ${charset}. Select the original encoding manually.`);
     }
   }
 
@@ -334,7 +335,7 @@ const VbeCodec = (() => {
       if (code < 128) output.push(code);
       else {
         const bytes = reverse.get(character);
-        if (!bytes) throw new Error(`${encoding}로 표현할 수 없는 문자: ${JSON.stringify(character)}. UTF-8을 선택해야 할 수 있습니다.`);
+        if (!bytes) throw new Error(`Character ${JSON.stringify(character)} cannot be represented in ${encoding}. Choose UTF-8 for a raw roundtrip or WSH-safe Encode for string literals.`);
         output.push(...bytes);
       }
     }
@@ -342,20 +343,142 @@ const VbeCodec = (() => {
   }
 
   function encodeText(text, encoding = 'utf-8') {
-    if (typeof text !== 'string') throw new Error('문자열을 입력하세요.');
+    if (typeof text !== 'string') throw new Error('Text input is required.');
     const charset = normalizeEncoding(encoding);
-    if (isUtf16(charset)) throw new Error('텍스트 입력의 UTF-16은 파일로 저장해 업로드하세요. 웹 변환은 UTF-8을 권장합니다.');
+    if (isUtf16(charset)) throw new Error('For UTF-16 text, upload a file. Use UTF-8 for pasted Unicode text.');
     return encodeBytes(encodeCharacters(text, charset), charset);
   }
 
   function decodeText(text, encoding = 'utf-8') {
-    if (typeof text !== 'string') throw new Error('문자열을 입력하세요.');
+    if (typeof text !== 'string') throw new Error('Text input is required.');
     const charset = normalizeEncoding(encoding);
-    if (isUtf16(charset)) throw new Error('텍스트 입력에서는 UTF-8 또는 원래의 Windows 코드페이지를 선택하세요.');
+    if (isUtf16(charset)) throw new Error('For pasted text, select UTF-8 or the original Windows code page.');
     return decodeBytes(encodeCharacters(text, charset), charset);
   }
 
+
+  // Decode text with the same character-level substitution semantics as the
+  // public-domain VBE reference decoder. This can recover externally generated
+  // scripts that fail strict byte-level escape or metadata validation.
+  function decodeTextCompatible(source, encoding = 'utf-8') {
+    if (typeof source !== 'string') throw new Error('Text input is required.');
+    const charset = normalizeEncoding(encoding);
+    if (isUtf16(charset)) throw new Error('For UTF-16 VBE input, upload a file.');
+    let count = 0;
+    const warnings = [];
+    const recovered = source.replace(compatibleMarkers, (match, payload) => {
+      count++;
+      const expanded = payload.replace(/@&/g, '\n').replace(/@#/g, '\r')
+        .replace(/@\*/g, '>').replace(/@!/g, '<').replace(/@\$/g, '@');
+      let index = -1;
+      let plain = '';
+      for (const character of expanded) {
+        const code = character.codePointAt(0);
+        if (code < 128) index++;
+        if (code < 128 && transformable(code)) {
+          plain += String.fromCharCode(decodeMap[selectors[index % 64]][code]);
+        } else {
+          plain += character;
+        }
+      }
+      return plain;
+    });
+    if (!count) throw new Error('No VBE block was found. Check the marker format (#@~^...^#~@).');
+    // Compare against the strict byte-oriented decoder when possible. Do not
+    // discard recovered source solely because metadata validation fails.
+    try {
+      const strict = decodeText(source, charset);
+      if (strict.text !== recovered) {
+        warnings.push('Character-level and strict byte-level decoding differ. Verify the original code page.');
+      }
+      warnings.push(...strict.warnings);
+    } catch (error) {
+      warnings.push(`Strict verification unavailable: ${error.message}`);
+    }
+    const bytes = encodeCharacters(recovered, charset);
+    return { text: recovered, bytes, encoding: charset, blockCount: count, warnings };
+  }
+
+  function decodeBytesCompatible(bytes, encoding = 'auto') {
+    if (!(bytes instanceof Uint8Array)) throw new Error('Byte input is required.');
+    const charset = normalizeEncoding(encoding, bytes);
+    if (isUtf16(charset)) {
+      const sourceText = decodeCharacters(bytes, charset);
+      const recovered = decodeTextCompatible(sourceText, 'utf-8');
+      recovered.warnings.push(`Input VBE was ${charset}; decoded output was converted to UTF-8.`);
+      return recovered;
+    }
+    return decodeTextCompatible(decodeCharacters(bytes, charset), charset);
+  }
+
+  // Convert Unicode inside quoted VBScript literals to ASCII-only expressions.
+  // This intentionally rejects any remaining non-ASCII outside strings.
+  // It does not parse arbitrary VBScript grammar or validate execution.
+  function unicodeLiteralsToAsciiSource(source) {
+    if (typeof source !== 'string') throw new Error('Text input is required.');
+    const value = source.charCodeAt(0) === 0xFEFF ? source.slice(1) : source;
+    let output = '';
+    let index = 0;
+    while (index < value.length) {
+      if (value[index] !== '"') {
+        const code = value.charCodeAt(index);
+        if (code > 127) {
+          const prior = value.slice(0, index);
+          const line = prior.split(/\r\n|\r|\n/).length;
+          const column = index - Math.max(prior.lastIndexOf('\r'), prior.lastIndexOf('\n'));
+          throw new Error(`Non-ASCII character outside a quoted string at line ${line}, column ${column}. Remove or rewrite it manually.`);
+        }
+        output += value[index++];
+        continue;
+      }
+      const start = index++;
+      let literal = '';
+      let closed = false;
+      while (index < value.length) {
+        const character = value[index++];
+        if (character === '"') {
+          if (value[index] === '"') {
+            literal += '"';
+            index++;
+          } else {
+            closed = true;
+            break;
+          }
+        } else {
+          if (character === '\r' || character === '\n') {
+            throw new Error('Unterminated or multiline VBScript string literal.');
+          }
+          literal += character;
+        }
+      }
+      if (!closed) throw new Error('Unterminated VBScript string literal.');
+      if (!/[\u0080-\uFFFF]/.test(literal)) {
+        output += value.slice(start, index);
+        continue;
+      }
+      const pieces = [];
+      let buffer = '';
+      const flush = () => {
+        if (buffer) pieces.push(`"${buffer.replace(/"/g, '""')}"`);
+        buffer = '';
+      };
+      for (let offset = 0; offset < literal.length; offset++) {
+        const code = literal.charCodeAt(offset);
+        if (code < 128) {
+          buffer += literal[offset];
+        } else {
+          flush();
+          pieces.push(`ChrW(&H${code.toString(16).toUpperCase().padStart(4, '0')})`);
+        }
+      }
+      flush();
+      output += `(${pieces.join(' & ')})`;
+    }
+    return output;
+  }
+
   return Object.freeze({ encodeText, decodeText, encodeBytes, decodeBytes,
+    decodeTextCompatible, decodeBytesCompatible, unicodeLiteralsToAsciiSource,
     encodeCharacters, decodeCharacters, detectEncoding });
 })();
 

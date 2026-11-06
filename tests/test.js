@@ -76,13 +76,13 @@ test('header checksum tampering is shown as a warning', () => {
   const tampered = sample.replace('qAQAAA==', 'AAAAAA==');
   const result = codec.decodeText(tampered);
   assert.equal(result.text, greeting);
-  assert.ok(result.warnings.some(x => x.includes('체크섬')));
+  assert.ok(result.warnings.some(x => x.includes('checksum')));
 });
 
 test('invalid VBE marker and escape are rejected', () => {
-  assert.throws(() => codec.decodeText('not a vbe block'), /VBE 블록/);
+  assert.throws(() => codec.decodeText('not a vbe block'), /VBE block/);
   const bad = sample.replace('\\ko$', '@?o$');
-  assert.throws(() => codec.decodeText(bad), /이스케이프/);
+  assert.throws(() => codec.decodeText(bad), /escape/);
 });
 
 test('UTF-8 BOM on input files is removed while encoding', () => {
@@ -94,7 +94,7 @@ test('mismatched declared length is detected', () => {
   const corrupted = sample.replace('DgAAAA==', 'DQAAAA==');
   const result = codec.decodeText(corrupted);
   assert.equal(result.text, greeting);
-  assert.ok(result.warnings.some(x => x.includes('길이')));
+  assert.ok(result.warnings.some(x => x.includes('length')));
 });
 
 const samplesDir = path.resolve(__dirname, '../test-samples');
@@ -161,5 +161,5 @@ test('UTF-16LE and UTF-16BE source detection and VBE decoding', () => {
 });
 
 test('corrupt byte sequences do not silently become replacement characters', () => {
-  assert.throws(() => codec.decodeCharacters(Uint8Array.of(0xff), 'utf-8'), /인코딩/);
+  assert.throws(() => codec.decodeCharacters(Uint8Array.of(0xff), 'utf-8'), /decoded|encoding/);
 });

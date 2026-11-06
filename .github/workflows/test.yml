@@ -21,4 +21,4 @@ jobs:
         with:
           node-version: '22'
       - name: Run codec regression tests
-        run: node --test tests/test.js
+        run: node --test tests/*.js
