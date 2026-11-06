@@ -1,64 +1,68 @@
-# VBE Codec v3.1.0 — Encoder & Decoder
+# VBE Codec v3.2.0
 
-Standalone, client-side VBE codec compatible with the Microsoft Script Encoder substitution format. **VBE is obfuscation, not encryption.** The app does not execute scripts or upload their contents to a server.
+A zero-dependency Microsoft Script Encoder VBE encode/decode web application for GitHub Pages. Everything happens in the visitor's browser; input files are not uploaded to a server. VBE is **obfuscation, not encryption**. The application never executes input scripts.
 
-## What's new
+## What's fixed in v3.2.0
 
-- Encoding and decoding with local byte-preserving file input.
-- An explicit choice of UTF-8, CP949/EUC-KR, CP932/Shift-JIS, CP936/GBK, CP950/Big5, and Windows-1252; decoding of UTF-16LE/UTF-16BE BOM files via text transcoding to UTF-8.
-- Rejects incorrectly decoded Unicode instead of silently outputting replacement characters.
-- Multi-block decoding, checksum and payload-length warnings, downloads, and Unicode demo.
-- 28+ regression tests, including real Unicode-rich VBScript fixtures, and a GitHub Actions **test-only** workflow.
+- Removed the entire `Encode (WSH-safe)` mode and its `ChrW` source-rewriting logic.
+- Replaced inconsistent byte-oriented substitution with Unicode-character-based VBE processing, analogous to the referenced PowerShell decoder.
+- Fixed **VBE length metadata**: an escaped control or special character represents **one** decoded source character even if its encoded representation has two characters.
+- Fixed **VBE checksum metadata**: includes non-ASCII Unicode code units as well as ASCII characters.
+- Separated **Read uploaded file as** (input) from **Save result as** (output). Selecting a legacy output encoding no longer reinterprets an existing UTF-8 input file as that legacy encoding.
+- Rejects unrepresentable Unicode characters in CP949 and other legacy output formats with a clear error, rather than replacing or corrupting them.
+- UTF-16LE/UTF-16BE output includes a BOM. UTF-8 output omits a BOM.
+- Keeps the web UI and code comments in English; test data can contain arbitrary Unicode characters.
 
-## GitHub Pages deployment
+## Encoding choices
 
-Use a **public** repository named `vbe-codec` on GitHub Free.
+**Read uploaded file as**: `Auto`, UTF-8, UTF-16LE/BE, CP949 (Korean), CP932 (Japanese), CP936 (Simplified Chinese), CP950 (Traditional Chinese), CP1252 (Western European). This control applies only to file uploads. Browser text pasted into the textarea is already Unicode.
 
-1. Replace `index.html`, `app.js`, `codec.js`, `style.css`, and `README.md`; include `.nojekyll`, `.github/workflows/test.yml`, `tests/*.js`, and `test-samples/`.
-2. Remove the obsolete `decoder.js` from v1 if it still exists. The v3 sources do not depend on it.
-3. `Settings > Pages > Build and deployment`: set `Source = Deploy from a branch`, `Branch = main`, `Folder = /(root)`.
-4. Make the changes in **one commit** with https://github.dev/ (press `.` on your repository) or Git locally. GitHub's basic upload page does not conveniently stage deletions with uploads.
-5. The site's URL is `https://USERNAME.github.io/vbe-codec/`.
+**Save result as**: `Same as input`, UTF-8, UTF-16LE, CP949, CP932, CP936, CP950 or CP1252. For pasted text, `Same as input` means UTF-8. For files it means the selected/detected input encoding.
 
-**The Actions workflow runs tests only, and does not gate GitHub Pages deployments.** To prevent publishing failing commits, later switch to an Actions deployment workflow that depends on the test job (or use a protected branch with required test checks and pull requests).
+To retain Korean, Japanese, Chinese, emoji and other Unicode characters in one source file, choose **UTF-8** or **UTF-16LE** for the output. CP949 **cannot** represent arbitrary Unicode; selecting it for such data now throws an error instead of silently corrupting text.
 
-## Unicode and legacy encoding caution
+For an existing UTF-8 `.vbe`, select UTF-8 for reading, and UTF-8 (or UTF-16LE) for output. For an existing CP949 `.vbe`, select CP949 for reading, and optionally select UTF-8 for output. `Auto` does not reliably distinguish legacy encodings; always set them manually if known.
 
-VBE is a historical **byte-oriented** obfuscation format. Passing UTF-8 multilingual and emoji roundtrip tests in this web application **does not mean Windows Script Host will run those `.vbe` files**. Legacy Windows Script Host commonly depends on the system's ANSI code page. CP949, Shift-JIS, GBK, and Big5 each represent only subsets of Unicode; emoji often cannot be represented at all. For legacy execution, prefer the actual code page of the original script, and use `Unicode_Runtime_ASCII_Source.vbs` for a portable ASCII-source test.
+## Critical limitation: Windows execution compatibility
 
-`Unicode_Stress_Test_UTF8.vbs` contains real Unicode string literals with UTF-8 BOM. `Unicode_Stress_Test_UTF16LE.vbs` contains the same source encoded in UTF-16LE with BOM. The UTF-16 input file is **transcoded to UTF-8** by the codec; this preserves characters but not original bytes. The original UTF-8 BOM is removed when encoding. Windows Script Host execution compatibility is distinct from codec roundtrip correctness.
+Successful encode/decode roundtrips and passing JavaScript tests **do not prove** that `cscript.exe`/`wscript.exe` can execute a generated Unicode `.vbe` file. Windows Script Encoder and Script Host are historical tools with distinct behavior by Unicode encoding and system code page. Actual Windows Script Host execution remains **unverified** for the files generated by this implementation. If execution is essential, check it against Microsoft's Script Encoder and the target Windows host. Do not execute untrusted VBE/VBS files.
 
-**Do not rely on Auto detection for existing East Asian VBE files.** It checks BOM and UTF-8 validity; when bytes do not form valid UTF-8 it defaults to CP949 as a heuristic. If the original file was produced on a Japanese or Chinese system, choose CP932, CP936, or CP950 explicitly. For copied text, select the original code page if known. Bad code-page selection can produce incorrect text even if the file passes checksum validation. Correctly reconstructing an unknown legacy script encoding cannot be guaranteed from an encoded byte stream alone.
+## Test files
 
-Text areas may normalize line endings. Prefer file upload and download for exact CRLF byte comparisons.
+The `test-samples/` directory contains files with real Unicode and ASCII source:
 
-## Regression tests
+- `Mixed_Unicode_ASCII_Stress_UTF8.vbs` and `.vbe`: mixed-script VBScript with Hangul, Japanese, Simplified/Traditional Chinese, Latin diacritics, Greek, Cyrillic, Arabic, Hebrew, Hindi, Thai, emoji, control escapes, and ASCII after Unicode.
+- `Unicode_Stress_Test_UTF8.vbs` and `.vbe`: longer Unicode stress test.
+- `Unicode_Stress_Test_UTF16LE.vbs` and `.vbe`: Unicode source with UTF-16LE BOM.
+- `Korean_CP949_Test.vbs` and `.vbe`: Korean CP949-only sample.
+
+`tests/fixtures/legacy_v31_utf8_bad_header.vbe` is intentionally retained as a regression fixture demonstrating a **bad metadata header from v3.1**. Do not use it as a valid VBE example.
+
+## Local and automated tests
 
 ```sh
 node --test tests/*.js
 ```
 
-The project includes:
+The GitHub Actions workflow `.github/workflows/test.yml` runs these tests for pushes and pull requests. This is **test-only**; it does not gate Pages deployment.
 
-- `test-samples/Unicode_Stress_Test_UTF8.vbs` — UTF-8 BOM source with Hangul, Japanese, simplified/traditional Chinese, Latin diacritics, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Thai, emoji, combining marks, mathematical symbols, 64-character selector rollover, and escape sequences.
-- `test-samples/Unicode_Stress_Test_UTF16LE.vbs` — the same source in UTF-16LE with BOM.
-- `test-samples/Korean_CP949_Test.vbs` — Windows Korean CP949 bytes.
-- `test-samples/Unicode_Runtime_ASCII_Source.vbs` — ASCII-only VBScript source that builds Unicode text using `ChrW` (including an emoji surrogate pair).
-- Matching `.vbe` files for the UTF-8, CP949, and ASCII-only fixtures, ready for direct Decode tests.
+Test coverage includes independent ASCII reference vectors, escaped-character header lengths, Unicode-inclusive checksums, mixed ASCII/Unicode decoding, UTF-8/UTF-16 inputs, legacy character sets, multiple encoded blocks, and an intentionally invalid old header. Browser tests are also run during development, including file upload and download.
 
-The tests are **roundtrip and format-vector tests**, not an independent compatibility certification with the original `screnc.exe`/Windows Script Host. Actual third-party VBE samples are needed to diagnose any remaining errors reported by a user.
+## GitHub Pages deployment
+
+Use a **Public** repository on GitHub Free.
+
+1. Extract this ZIP locally, and upload its contents (not the ZIP itself) to the root of the repository using [github.dev](https://github.dev) or Git.
+2. Replace `index.html`, `codec.js`, `app.js`, `style.css`, `.nojekyll`, `README.md`, the `tests/` directory, the `test-samples/` directory, and `.github/workflows/test.yml`.
+3. Remove obsolete `decoder.js` and any files from earlier releases that are no longer included in this ZIP.
+4. Commit the additions, replacements and deletions as one commit.
+5. Keep **Settings → Pages → Build and deployment → Deploy from a branch → main → /(root)**.
+6. Visit `https://USERNAME.github.io/vbe-codec/` and verify the displayed version is `v3.2.0`.
 
 ## References
 
-The substitution tables are checked against the public-domain decoder by Didier Stevens: https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py
+- [Didier Stevens' public-domain VBE decoder](https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py)
+- [A technical analysis of the historical Microsoft Script Encoder](https://www.virusbulletin.com/virusbulletin/2006/01/inside-microsoft-script-encoder/)
+- [The PowerShell decoder used for comparison](https://github.com/61106960/VBE-Decoder/blob/main/VBE-Decoder.ps1)
 
-This project is an independent implementation, not a fork of `61106960/VBE-Decoder`.
-
-## v3.1 updates
-
-- Every UI message, option, validation warning, and placeholder is English; HTML `lang` is `en`.
-- Decode now uses a character-level PowerShell-compatible algorithm and displays warnings from a parallel strict-byte comparison.
-- Optional **Encode (WSH-safe)** rewrites Unicode characters **inside double-quoted VBScript string literals** as `ChrW(&HXXXX)` calls before encoding ASCII source. Emoji become surrogate-pair calls.
-- Non-ASCII outside string literals is rejected to prevent silent source changes. WSH-safe mode is not a VBScript parser or an execution certification.
-- Raw UTF-8 data roundtrip may succeed but WSH may not run the encoded Unicode-literal script.
-- Windows execution has not been verified in this Linux environment. Confirm on the actual Windows host.
+This implementation is independently written and does not fork the PowerShell repository.

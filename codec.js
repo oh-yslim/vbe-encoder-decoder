@@ -48,8 +48,11 @@ const VbeCodec = (() => {
     }
   }
 
-  const markers = /#@~\^([A-Za-z0-9+/]{6}==)([\s\S]*?)([A-Za-z0-9+/]{6}==)\^#~@/g;
-  const compatibleMarkers = /#@~\^.{6}==([\s\S]*?).{6}==\^#~@/g;
+  // VBE substitution works on Unicode code units, not encoded UTF-8 bytes.
+  // Escaped ASCII characters count as one source character, not two payload characters.
+  const markers = /#@~\^(.{6}==)([\s\S]*?)(.{6}==)\^#~@/g;
+  const escapeToChar = Object.freeze({ '#': '\r', '&': '\n', '!': '<', '*': '>', '$': '@' });
+  const charToEscape = Object.freeze({ '\r': '#', '\n': '&', '<': '!', '>': '*', '@': '$' });
   const reverseLegacy = new Map();
   const cp1252Special = [
     '€', null, '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', null, 'Ž', null,
@@ -71,12 +74,6 @@ const VbeCodec = (() => {
     return false;
   }
 
-  function requireDbcsPair(bytes, index, encoding) {
-    if (index + 1 >= bytes.length || !isDbcsTrail(bytes[index + 1], encoding)) {
-      throw new Error(`Truncated or invalid ${encoding} multibyte sequence near byte ${index + 1}.`);
-    }
-  }
-
   function normalizeEncoding(encoding, bytes) {
     if (!encoding || encoding === 'auto') return bytes ? detectEncoding(bytes) : 'utf-8';
     if (['utf-8', 'euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252', 'utf-16le', 'utf-16be'].includes(encoding)) return encoding;
@@ -87,20 +84,6 @@ const VbeCodec = (() => {
     return encoding === 'utf-16le' || encoding === 'utf-16be';
   }
 
-  function binaryString(bytes) {
-    const chunks = [];
-    for (let index = 0; index < bytes.length; index += 16384) {
-      chunks.push(String.fromCharCode(...bytes.subarray(index, index + 16384)));
-    }
-    return chunks.join('');
-  }
-
-  function binaryBytes(value) {
-    const bytes = new Uint8Array(value.length);
-    for (let index = 0; index < value.length; index++) bytes[index] = value.charCodeAt(index);
-    return bytes;
-  }
-
   function intToBase64(value) {
     return btoa(String.fromCharCode(
       value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255
@@ -108,138 +91,136 @@ const VbeCodec = (() => {
   }
 
   function base64ToInt(value) {
-    const decoded = atob(value);
-    if (decoded.length !== 4) throw new Error('Invalid VBE Base64 metadata.');
-    return (decoded.charCodeAt(0) | (decoded.charCodeAt(1) << 8) |
-      (decoded.charCodeAt(2) << 16) | (decoded.charCodeAt(3) << 24)) >>> 0;
+    try {
+      const decoded = atob(value);
+      if (decoded.length !== 4) return null;
+      return (decoded.charCodeAt(0) | (decoded.charCodeAt(1) << 8) |
+        (decoded.charCodeAt(2) << 16) | (decoded.charCodeAt(3) << 24)) >>> 0;
+    } catch {
+      return null;
+    }
   }
 
-  function encodedUnitCount(bytes, encoding) {
-    let count = 0;
-    for (let index = 0; index < bytes.length; index++) {
-      const byte = bytes[index];
-      if (isDbcsLead(byte, encoding)) {
-        requireDbcsPair(bytes, index, encoding);
+  function validateScalarText(text) {
+    for (let index = 0; index < text.length; index++) {
+      const current = text.charCodeAt(index);
+      if (current >= 0xd800 && current <= 0xdbff) {
+        if (index + 1 >= text.length || text.charCodeAt(index + 1) < 0xdc00 ||
+            text.charCodeAt(index + 1) > 0xdfff) {
+          throw new Error(`Unpaired high surrogate at character ${index + 1}.`);
+        }
         index++;
-      } else if (encoding === 'utf-8' && (byte & 0xc0) === 0x80) {
-        continue;
+      } else if (current >= 0xdc00 && current <= 0xdfff) {
+        throw new Error(`Unpaired low surrogate at character ${index + 1}.`);
       }
-      count++;
     }
-    return count;
   }
 
-  function encodeBytes(inputBytes, encoding = 'utf-8') {
-    if (!(inputBytes instanceof Uint8Array)) throw new Error('Byte input is required.');
-    const charset = normalizeEncoding(encoding, inputBytes);
-    if (isUtf16(charset)) {
-      const text = decodeCharacters(inputBytes, charset);
-      const result = encodeText(text, 'utf-8');
-      result.warnings.push(`Input was ${charset} and was converted to UTF-8 VBE. Legacy Windows Script Host compatibility is not guaranteed.`);
-      return result;
-    }
-    const input = charset === 'utf-8' && inputBytes[0] === 0xef &&
-      inputBytes[1] === 0xbb && inputBytes[2] === 0xbf ? inputBytes.subarray(3) : inputBytes;
+  function encodePayload(source) {
     const payload = [];
+    let selectorIndex = 0;
     let checksum = 0;
-    let index = 0;
-
-    for (let pos = 0; pos < input.length; pos++) {
-      let byte = input[pos];
-      if (isDbcsLead(byte, charset)) {
-        requireDbcsPair(input, pos, charset);
-        payload.push(byte, input[++pos]);
-        continue;
-      }
-      if (byte < 128) {
-        checksum = (checksum + byte) >>> 0;
-        if (transformable(byte)) byte = encodeMap[selectors[index % 64]][byte];
-        index++;
-        if (Object.prototype.hasOwnProperty.call(byteToEscape, byte)) {
-          payload.push(64, byteToEscape[byte]);
-        } else {
-          payload.push(byte);
-        }
+    for (let i = 0; i < source.length; i++) {
+      const code = source.charCodeAt(i);
+      checksum = (checksum + code) >>> 0;
+      const plain = source[i];
+      if (Object.prototype.hasOwnProperty.call(charToEscape, plain)) {
+        payload.push('@', charToEscape[plain]);
+      } else if (code < 128) {
+        const value = transformable(code) ? encodeMap[selectors[selectorIndex % 64]][code] : code;
+        payload.push(String.fromCharCode(value));
       } else {
-        payload.push(byte);
+        payload.push(plain);
       }
+      if (code < 128) selectorIndex++;
     }
-
-    const bodyBytes = Uint8Array.from(payload);
-    const units = encodedUnitCount(bodyBytes, charset);
-    const result = `#@~^${intToBase64(units)}${binaryString(bodyBytes)}${intToBase64(checksum)}^#~@`;
-    const resultBytes = binaryBytes(result);
-    return { bytes: resultBytes, text: decodeCharacters(resultBytes, charset), encoding: charset,
-      blockCount: 1, warnings: [], encodedUnits: units, checksum };
+    return { payload: payload.join(''), checksum, characters: source.length };
   }
 
-  function decodePayload(bytes, charset) {
-    const output = [];
-    let index = 0;
+  function decodePayload(payload) {
+    let plain = '';
+    let selectorIndex = 0;
     let checksum = 0;
-    for (let pos = 0; pos < bytes.length; pos++) {
-      let byte = bytes[pos];
-      if (isDbcsLead(byte, charset)) {
-        requireDbcsPair(bytes, pos, charset);
-        output.push(byte, bytes[++pos]);
-        continue;
-      }
-      if (byte === 64) {
-        if (pos + 1 >= bytes.length ||
-            !Object.prototype.hasOwnProperty.call(escapeToByte, bytes[pos + 1])) {
-          throw new Error(`Invalid VBE escape near byte ${pos + 1}.`);
+    for (let i = 0; i < payload.length; i++) {
+      let value = payload[i];
+      if (value === '@') {
+        const suffix = payload[++i];
+        if (!Object.prototype.hasOwnProperty.call(escapeToChar, suffix)) {
+          throw new Error(`Invalid VBE escape at encoded character ${i}.`);
         }
-        byte = escapeToByte[bytes[++pos]];
-      } else if (byte < 128 && transformable(byte)) {
-        byte = decodeMap[selectors[index % 64]][byte];
+        value = escapeToChar[suffix];
+      } else {
+        const code = value.charCodeAt(0);
+        if (code < 128 && transformable(code)) {
+          value = String.fromCharCode(decodeMap[selectors[selectorIndex % 64]][code]);
+        }
       }
-      if (byte < 128) {
-        index++;
-        checksum = (checksum + byte) >>> 0;
-      }
-      output.push(byte);
+      plain += value;
+      const plainCode = value.charCodeAt(0);
+      checksum = (checksum + plainCode) >>> 0;
+      if (plainCode < 128) selectorIndex++;
     }
-    return { bytes: Uint8Array.from(output), checksum };
+    return { plain, checksum };
   }
 
-  function decodeBytes(source, encoding = 'auto') {
-    if (!(source instanceof Uint8Array) || !source.length) {
-      throw new Error('Enter VBE data.');
-    }
-    const charset = normalizeEncoding(encoding, source);
-    if (isUtf16(charset)) {
-      const text = decodeCharacters(source, charset);
-      const result = decodeText(text, 'utf-8');
-      result.warnings.push(`${charset} VBE text was transcoded to UTF-8.`);
-      return result;
-    }
-    const actualSource = charset === 'utf-8' && source.length >= 3 && source[0] === 0xef &&
-      source[1] === 0xbb && source[2] === 0xbf ? source.subarray(3) : source;
-    const original = binaryString(actualSource);
-    let count = 0;
+  function encodeText(source, encoding = 'utf-8') {
+    if (typeof source !== 'string') throw new Error('Text input is required.');
+    const charset = normalizeEncoding(encoding);
+    validateScalarText(source);
+    const prepared = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
+    // Validate source representability in the selected file encoding first.
+    // No fallback to replacement characters is permitted.
+    encodeCharacters(prepared, charset);
+    const transformed = encodePayload(prepared);
+    const encoded = `#@~^${intToBase64(transformed.characters)}${transformed.payload}${intToBase64(transformed.checksum)}^#~@`;
+    const bytes = encodeCharacters(encoded, charset, isUtf16(charset));
     const warnings = [];
-    markers.lastIndex = 0;
-    const decoded = original.replace(markers, (match, len, payload, check) => {
-      count++;
-      const bytes = binaryBytes(payload);
-      const result = decodePayload(bytes, charset);
-      const declaredUnits = base64ToInt(len);
-      const declaredChecksum = base64ToInt(check);
-      const actualUnits = encodedUnitCount(bytes, charset);
-      if (declaredUnits !== actualUnits) {
-        warnings.push(`Block ${count}: encoded length mismatch (declared ${declaredUnits}, actual ${actualUnits})`);
-      }
-      if (declaredChecksum !== result.checksum) {
-        warnings.push(`Block ${count}: checksum mismatch (declared ${declaredChecksum}, actual ${result.checksum})`);
-      }
-      return binaryString(result.bytes);
-    });
-    if (count === 0) {
-      throw new Error('No valid VBE block (#@~^...^#~@) was found. Check the format and markers.');
+    if (charset === 'utf-8' && /[^\x00-\x7f]/.test(prepared)) {
+      warnings.push('UTF-8 preserves Unicode text, but Windows Script Host may not execute UTF-8 VBE files.');
     }
-    const resultBytes = binaryBytes(decoded);
-    return { bytes: resultBytes, text: decodeCharacters(resultBytes, charset), encoding: charset,
-      blockCount: count, warnings };
+    return { text: encoded, bytes, encoding: charset, blockCount: 1, warnings,
+      encodedUnits: transformed.characters, checksum: transformed.checksum };
+  }
+
+  function decodeText(source, encoding = 'utf-8') {
+    if (typeof source !== 'string') throw new Error('Text input is required.');
+    const charset = normalizeEncoding(encoding);
+    const warnings = [];
+    let blockCount = 0;
+    markers.lastIndex = 0;
+    const decoded = source.replace(markers, (match, declaredLength, payload, declaredChecksum) => {
+      blockCount++;
+      const result = decodePayload(payload);
+      const length = base64ToInt(declaredLength);
+      const checksum = base64ToInt(declaredChecksum);
+      if (length !== null && length !== result.plain.length) {
+        warnings.push(`Block ${blockCount}: source-length metadata mismatch (${length} vs ${result.plain.length}).`);
+      }
+      if (checksum !== null && checksum !== result.checksum) {
+        warnings.push(`Block ${blockCount}: checksum mismatch (${checksum} vs ${result.checksum}).`);
+      }
+      if (length === null || checksum === null) {
+        warnings.push(`Block ${blockCount}: noncanonical VBE metadata.`);
+      }
+      return result.plain;
+    });
+    if (!blockCount) throw new Error('No VBE block (#@~^...^#~@) found.');
+    validateScalarText(decoded);
+    // Encoding selection affects input/output bytes, never the character substitution.
+    const bytes = encodeCharacters(decoded, charset, isUtf16(charset));
+    return { text: decoded, bytes, encoding: charset, blockCount, warnings };
+  }
+
+  function encodeBytes(bytes, encoding = 'auto') {
+    if (!(bytes instanceof Uint8Array)) throw new Error('Byte input is required.');
+    const charset = normalizeEncoding(encoding, bytes);
+    return encodeText(decodeCharacters(bytes, charset), charset);
+  }
+
+  function decodeBytes(bytes, encoding = 'auto') {
+    if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('Byte input is required.');
+    const charset = normalizeEncoding(encoding, bytes);
+    return decodeText(decodeCharacters(bytes, charset), charset);
   }
 
   function detectEncoding(bytes) {
@@ -316,11 +297,12 @@ const VbeCodec = (() => {
     return reverse;
   }
 
-  function encodeCharacters(text, encoding) {
+  function encodeCharacters(text, encoding, withBom = false) {
     if (encoding === 'utf-8') return new TextEncoder().encode(text);
     if (isUtf16(encoding)) {
       const bytes = [];
       const little = encoding === 'utf-16le';
+      if (withBom) bytes.push(...(little ? [255, 254] : [254, 255]));
       for (let i = 0; i < text.length; i++) {
         const code = text.charCodeAt(i);
         if (little) bytes.push(code & 255, code >>> 8);
@@ -335,151 +317,18 @@ const VbeCodec = (() => {
       if (code < 128) output.push(code);
       else {
         const bytes = reverse.get(character);
-        if (!bytes) throw new Error(`Character ${JSON.stringify(character)} cannot be represented in ${encoding}. Choose UTF-8 for a raw roundtrip or WSH-safe Encode for string literals.`);
+        if (!bytes) {
+          throw new Error(`Character ${JSON.stringify(character)} cannot be represented in ${encoding}. Use UTF-8 or UTF-16LE to preserve full Unicode.`);
+        }
         output.push(...bytes);
       }
     }
     return Uint8Array.from(output);
   }
 
-  function encodeText(text, encoding = 'utf-8') {
-    if (typeof text !== 'string') throw new Error('Text input is required.');
-    const charset = normalizeEncoding(encoding);
-    if (isUtf16(charset)) throw new Error('For UTF-16 text, upload a file. Use UTF-8 for pasted Unicode text.');
-    return encodeBytes(encodeCharacters(text, charset), charset);
-  }
-
-  function decodeText(text, encoding = 'utf-8') {
-    if (typeof text !== 'string') throw new Error('Text input is required.');
-    const charset = normalizeEncoding(encoding);
-    if (isUtf16(charset)) throw new Error('For pasted text, select UTF-8 or the original Windows code page.');
-    return decodeBytes(encodeCharacters(text, charset), charset);
-  }
-
-
-  // Decode text with the same character-level substitution semantics as the
-  // public-domain VBE reference decoder. This can recover externally generated
-  // scripts that fail strict byte-level escape or metadata validation.
-  function decodeTextCompatible(source, encoding = 'utf-8') {
-    if (typeof source !== 'string') throw new Error('Text input is required.');
-    const charset = normalizeEncoding(encoding);
-    if (isUtf16(charset)) throw new Error('For UTF-16 VBE input, upload a file.');
-    let count = 0;
-    const warnings = [];
-    const recovered = source.replace(compatibleMarkers, (match, payload) => {
-      count++;
-      const expanded = payload.replace(/@&/g, '\n').replace(/@#/g, '\r')
-        .replace(/@\*/g, '>').replace(/@!/g, '<').replace(/@\$/g, '@');
-      let index = -1;
-      let plain = '';
-      for (const character of expanded) {
-        const code = character.codePointAt(0);
-        if (code < 128) index++;
-        if (code < 128 && transformable(code)) {
-          plain += String.fromCharCode(decodeMap[selectors[index % 64]][code]);
-        } else {
-          plain += character;
-        }
-      }
-      return plain;
-    });
-    if (!count) throw new Error('No VBE block was found. Check the marker format (#@~^...^#~@).');
-    // Compare against the strict byte-oriented decoder when possible. Do not
-    // discard recovered source solely because metadata validation fails.
-    try {
-      const strict = decodeText(source, charset);
-      if (strict.text !== recovered) {
-        warnings.push('Character-level and strict byte-level decoding differ. Verify the original code page.');
-      }
-      warnings.push(...strict.warnings);
-    } catch (error) {
-      warnings.push(`Strict verification unavailable: ${error.message}`);
-    }
-    const bytes = encodeCharacters(recovered, charset);
-    return { text: recovered, bytes, encoding: charset, blockCount: count, warnings };
-  }
-
-  function decodeBytesCompatible(bytes, encoding = 'auto') {
-    if (!(bytes instanceof Uint8Array)) throw new Error('Byte input is required.');
-    const charset = normalizeEncoding(encoding, bytes);
-    if (isUtf16(charset)) {
-      const sourceText = decodeCharacters(bytes, charset);
-      const recovered = decodeTextCompatible(sourceText, 'utf-8');
-      recovered.warnings.push(`Input VBE was ${charset}; decoded output was converted to UTF-8.`);
-      return recovered;
-    }
-    return decodeTextCompatible(decodeCharacters(bytes, charset), charset);
-  }
-
-  // Convert Unicode inside quoted VBScript literals to ASCII-only expressions.
-  // This intentionally rejects any remaining non-ASCII outside strings.
-  // It does not parse arbitrary VBScript grammar or validate execution.
-  function unicodeLiteralsToAsciiSource(source) {
-    if (typeof source !== 'string') throw new Error('Text input is required.');
-    const value = source.charCodeAt(0) === 0xFEFF ? source.slice(1) : source;
-    let output = '';
-    let index = 0;
-    while (index < value.length) {
-      if (value[index] !== '"') {
-        const code = value.charCodeAt(index);
-        if (code > 127) {
-          const prior = value.slice(0, index);
-          const line = prior.split(/\r\n|\r|\n/).length;
-          const column = index - Math.max(prior.lastIndexOf('\r'), prior.lastIndexOf('\n'));
-          throw new Error(`Non-ASCII character outside a quoted string at line ${line}, column ${column}. Remove or rewrite it manually.`);
-        }
-        output += value[index++];
-        continue;
-      }
-      const start = index++;
-      let literal = '';
-      let closed = false;
-      while (index < value.length) {
-        const character = value[index++];
-        if (character === '"') {
-          if (value[index] === '"') {
-            literal += '"';
-            index++;
-          } else {
-            closed = true;
-            break;
-          }
-        } else {
-          if (character === '\r' || character === '\n') {
-            throw new Error('Unterminated or multiline VBScript string literal.');
-          }
-          literal += character;
-        }
-      }
-      if (!closed) throw new Error('Unterminated VBScript string literal.');
-      if (!/[\u0080-\uFFFF]/.test(literal)) {
-        output += value.slice(start, index);
-        continue;
-      }
-      const pieces = [];
-      let buffer = '';
-      const flush = () => {
-        if (buffer) pieces.push(`"${buffer.replace(/"/g, '""')}"`);
-        buffer = '';
-      };
-      for (let offset = 0; offset < literal.length; offset++) {
-        const code = literal.charCodeAt(offset);
-        if (code < 128) {
-          buffer += literal[offset];
-        } else {
-          flush();
-          pieces.push(`ChrW(&H${code.toString(16).toUpperCase().padStart(4, '0')})`);
-        }
-      }
-      flush();
-      output += `(${pieces.join(' & ')})`;
-    }
-    return output;
-  }
-
   return Object.freeze({ encodeText, decodeText, encodeBytes, decodeBytes,
-    decodeTextCompatible, decodeBytesCompatible, unicodeLiteralsToAsciiSource,
     encodeCharacters, decodeCharacters, detectEncoding });
+
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = VbeCodec;

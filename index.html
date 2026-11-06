@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Offline-first, browser-based VBE encoder and decoder with Unicode-aware options.">
+  <meta name="description" content="Client-side VBE encoder and decoder with Unicode-safe character processing.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.1.0">
-  <script src="./codec.js?v=3.1.0" defer></script>
-  <script src="./app.js?v=3.1.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.2.0">
+  <script src="./codec.js?v=3.2.0" defer></script>
+  <script src="./app.js?v=3.2.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -32,30 +32,40 @@
         <label class="file-picker">Choose file
           <input id="upload" type="file" accept=".vbs,.vbe,.jse,.js,.txt,text/plain">
         </label>
-        <label class="select-wrap">Text encoding
-          <select id="encoding">
+        <label class="select-wrap">Read uploaded file as
+          <select id="inputEncoding">
             <option value="auto">Auto (UTF-8 first; manually select legacy encodings)</option>
-            <option value="utf-8">UTF-8 (full Unicode; not necessarily WSH-compatible)</option>
+            <option value="utf-8">UTF-8 (full Unicode; Windows Script Host compatibility not guaranteed)</option>
             <option value="euc-kr">CP949 / Korean Windows</option>
             <option value="shift_jis">CP932 / Shift-JIS / Japanese Windows</option>
             <option value="gbk">CP936 / GBK / Simplified Chinese Windows</option>
             <option value="big5">CP950 / Big5 / Traditional Chinese Windows</option>
             <option value="windows-1252">CP1252 / Western European Windows</option>
-            <option value="utf-16le">UTF-16 LE (file input)</option>
-            <option value="utf-16be">UTF-16 BE (file input)</option>
+            <option value="utf-16le">UTF-16 LE</option>
+            <option value="utf-16be">UTF-16 BE</option>
+          </select>
+        </label>
+        <label class="select-wrap">Save result as
+          <select id="outputEncoding">
+            <option value="match">Same as input (UTF-8 for pasted text)</option>
+            <option value="utf-8">UTF-8 (Unicode)</option>
+            <option value="utf-16le">UTF-16 LE + BOM (Unicode)</option>
+            <option value="euc-kr">CP949 (Korean)</option>
+            <option value="shift_jis">CP932 (Japanese)</option>
+            <option value="gbk">CP936 (Chinese Simplified)</option>
+            <option value="big5">CP950 (Chinese Traditional)</option>
+            <option value="windows-1252">CP1252 (Western European)</option>
           </select>
         </label>
       </div>
-      <p class="muted help">File input preserves original bytes. Pasted text is encoded using the selected character set. Automatic legacy encoding detection is not reliable.</p>
+      <p class="muted help">File input is decoded using the selected character set. Pasted text is already Unicode. Save result encoding is chosen separately. Legacy code pages cannot contain all Unicode characters; encoding fails rather than replacing them. Auto-detection of legacy files is unreliable.</p>
       <label for="input" class="field-label">Or paste text</label>
       <textarea id="input" spellcheck="false" translate="no" placeholder="Paste VBScript source or #@~^...^#~@ VBE content."></textarea>
       <div class="actions">
-        <button type="button" id="encode" class="primary">Encode (raw) → .vbe</button>
-        <button type="button" id="encodeSafe" class="primary">Encode (WSH-safe) → .vbe</button>
+        <button type="button" id="encode" class="primary">Encode → .vbe</button>
         <button type="button" id="decode" class="secondary">Decode → .vbs</button>
         <button type="button" id="clear">Clear</button>
       </div>
-      <p class="muted help"><strong>WSH-safe encode</strong> converts non-ASCII characters inside VBScript quoted string literals into <code>ChrW(&amp;HXXXX)</code> expressions before encoding. Non-ASCII outside quoted strings is rejected to avoid silent changes. This does not validate all VBScript syntax.</p>
     </section>
 
     <section class="panel" aria-labelledby="resultTitle">
@@ -71,8 +81,8 @@
 
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
-      <p>Raw UTF-8 Unicode roundtrips do not prove Windows Script Host compatibility. Legacy code pages cannot represent every Unicode character. WSH-safe encoding generates ASCII-only source, including <code>ChrW</code> expressions for Unicode string literals. Console fonts and output code pages may still affect display.</p>
-      <p>v3.1.0 · All processing takes place in your browser.</p>
+      <p>UTF-8 roundtrips do not guarantee Windows Script Host execution. CP949 and other legacy code pages cannot represent every Unicode character; choose UTF-8 for lossless text conversion or UTF-16 LE for Windows Unicode file encoding. Test VBE execution separately.</p>
+      <p>v3.2.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>
