@@ -1,0 +1,47 @@
+:root { font-family: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif; color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f6fa; color: #192232; }
+.wrap { max-width: 1020px; margin: 0 auto; padding: 42px 22px 50px; }
+.hero { margin-bottom: 30px; }
+.eyebrow { color: #4b65a8; font-size: 12px; font-weight: 750; letter-spacing: .11em; }
+h1 { font-size: clamp(35px, 6vw, 52px); letter-spacing: -.045em; margin: 7px 0; }
+h2 { font-size: 18px; margin: 0; }
+p { line-height: 1.65; }
+.hero p { color: #5b6576; margin: 9px 0 17px; }
+.privacy { display: inline-block; padding: 10px 13px; border-radius: 9px; color: #24634a; background: #e8f4ec; font-size: 13px; font-weight: 650; }
+.panel { background: #fff; padding: 25px; border: 1px solid #e1e5ed; border-radius: 15px; box-shadow: 0 5px 25px #182b4808; margin: 19px 0; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 19px; }
+.controls { display: flex; flex-wrap: wrap; align-items: end; gap: 15px; margin-bottom: 20px; }
+.file-picker { cursor: pointer; font-weight: 650; padding: 10px 16px; border-radius: 8px; background: #eef3ff; color: #284a92; }
+.file-picker input { display: block; margin-top: 9px; max-width: 280px; font-size: 12px; }
+.select-wrap { display: grid; gap: 6px; font-size: 13px; font-weight: 650; color: #596275; }
+select { min-height: 40px; padding: 7px; border: 1px solid #cbd3e2; border-radius: 8px; background: #fff; color: #192232; }
+.field-label { display: block; font-weight: 600; font-size: 13px; margin: 0 0 8px; }
+textarea { width: 100%; min-height: 215px; resize: vertical; border: 1px solid #cbd3e2; border-radius: 9px; padding: 15px; background: #fbfcff; color: #192232; font: 13px/1.6 Consolas, 'Cascadia Code', monospace; }
+textarea:focus-visible, select:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid #81a8fb; outline-offset: 2px; }
+textarea[readonly] { background: #f8fafc; }
+.actions { display: flex; gap: 10px; margin-top: 13px; flex-wrap: wrap; }
+button { font: inherit; font-weight: 650; color: #33435b; border-radius: 8px; border: 1px solid #cbd3e2; background: #fff; padding: 10px 17px; cursor: pointer; }
+button.primary { background: #2854bf; color: white; border-color: #2854bf; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:not(:disabled):hover { filter: brightness(.95); }
+.text-button { background: transparent; border: 0; color: #2854bf; padding: 0; }
+.muted { color: #798394; font-size: 12px; white-space: pre-wrap; }
+#message { margin: 16px 0 0; font-size: 13px; color: #24634a; }
+#message.error { color: #b02f3b; }
+#details { margin: 6px 0 0; }
+footer { text-align: center; color: #8490a3; font-size: 12px; line-height: 1.8; margin-top: 28px; }
+@media (max-width: 520px) { .wrap { padding: 22px 12px; } .panel { padding: 17px; } .section-heading { align-items: flex-start; } .muted { text-align: right; } }
+@media (prefers-color-scheme: dark) {
+  body { background: #101826; color: #e9edf5; }
+  .hero p { color: #aab5c5; } .eyebrow { color: #a5befe; }
+  .privacy { background: #18372c; color: #90ddb7; }
+  .panel { background: #1a2535; border-color: #344154; box-shadow: none; }
+  textarea, textarea[readonly] { background: #111a29; color: #e7edf9; border-color: #44516a; }
+  select, button { background: #263348; color: #e9edf5; border-color: #56647a; }
+  button.primary { background: #3869cf; border-color: #3869cf; }
+  .file-picker { background: #233b67; color: #b7ceff; }
+  .select-wrap, .muted, footer { color: #a5afbf; }
+  .text-button { background: transparent; color: #9ebdff; }
+  #message { color: #90ddb7; } #message.error { color: #ff8b91; }
+}

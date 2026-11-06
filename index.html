@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="VBE 파일을 브라우저에서만 디코딩하는 무료 도구">
+  <title>VBE Decoder | 로컬 VBScript 디코더</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./decoder.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <div class="eyebrow">CLIENT-SIDE TOOL · NO SERVER REQUIRED</div>
+      <h1>VBE Decoder</h1>
+      <p>Microsoft Script Encoder 형식의 <code>.vbe</code> 파일을 브라우저에서 디코딩합니다.</p>
+      <div class="privacy">&#10003; 외부 서버 업로드 없음 &nbsp; &#10003; 라이브러리 없음 &nbsp; &#10003; 코드 실행 없음</div>
+    </header>
+
+    <section class="panel" aria-labelledby="sourceTitle">
+      <div class="section-heading"><h2 id="sourceTitle">1. 인코딩된 스크립트</h2><button type="button" class="text-button" id="sample">예제 입력</button></div>
+      <div class="controls">
+        <label class="file-picker">.vbe 파일 선택 <input id="upload" type="file" accept=".vbe,.txt,.jse,.js,.vbs,text/plain"></label>
+        <label class="select-wrap">파일 문자 인코딩
+          <select id="encoding"><option value="auto">자동 감지 (UTF-8 → CP949)</option><option value="utf-8">UTF-8</option><option value="euc-kr">CP949 (한국어 Windows)</option></select>
+        </label>
+      </div>
+      <label for="input" class="field-label">또는 VBE 데이터를 붙여넣으세요</label>
+      <textarea id="input" spellcheck="false" placeholder="#@~^......==인코딩된 내용......==^#~@"></textarea>
+      <div class="actions"><button type="button" id="decode" class="primary">디코딩</button><button type="button" id="clear">초기화</button></div>
+    </section>
+
+    <section class="panel" aria-labelledby="resultTitle">
+      <div class="section-heading"><h2 id="resultTitle">2. 디코딩 결과</h2><span class="muted">결과는 실행되지 않습니다</span></div>
+      <textarea id="output" aria-label="디코딩 결과" readonly spellcheck="false" placeholder="디코딩 결과가 여기에 표시됩니다."></textarea>
+      <div class="actions"><button type="button" id="copy" disabled>결과 복사</button><button type="button" id="download" disabled>.vbs 다운로드</button></div>
+      <p id="message" role="status" aria-live="polite">파일을 선택하거나 VBE 문자열을 붙여넣으세요.</p>
+      <p id="details" class="muted" aria-live="polite"></p>
+    </section>
+
+    <footer>VBE는 암호화가 아닌 난독화입니다. 신뢰하지 않는 스크립트를 실행하지 마세요. <br>모든 데이터는 현재 브라우저에서만 처리됩니다.</footer>
+  </main>
+</body>
+</html>
