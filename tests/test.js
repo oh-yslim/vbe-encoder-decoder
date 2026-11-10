@@ -22,13 +22,31 @@ function metadata(encoded) {
 
 function checksum(source) {
   let sum = 0;
-  for (let i = 0; i < source.length; i++) sum = (sum + source.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < source.length; i++) {
+    const unit = source.charCodeAt(i);
+    if (unit < 128) sum = (sum + unit) >>> 0;
+  }
   return sum;
 }
 
 test('published independent ASCII VBE vector is decoded exactly', () => {
   assert.equal(codec.decodeText(sample).text, plain);
   assert.equal(codec.encodeText(plain).text, sample);
+});
+
+test('native Windows Unicode checksum oracle: only ASCII source units are summed', () => {
+  const sourcePath = path.join(fixture, 'WSH_Probe_Unicode_UTF16LE.vbs');
+  const source = fs.readFileSync(sourcePath).toString('utf16le').replace(/^\uFEFF/, '');
+  const encoded = codec.encodeText(source, 'utf-16le');
+  const data = metadata(encoded.text);
+  assert.equal(source.length, 94);
+  assert.equal(data.payload.length, 100);
+  assert.equal(data.sum, 6062);
+  assert.equal(data.sum, checksum(source));
+  assert.ok(encoded.text.endsWith('rhcAAA==^#~@'));
+  assert.equal(encoded.text, codec.decodeCharacters(encoded.bytes, 'utf-16le'));
+  assert.deepEqual(codec.decodeText(encoded.text, 'utf-16le').warnings, []);
+  assert.equal(codec.decodeText(encoded.text, 'utf-16le').text, source);
 });
 
 test('VBE header length counts encoded payload characters, including escapes', () => {

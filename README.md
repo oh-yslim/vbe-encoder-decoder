@@ -1,4 +1,4 @@
-# VBE Codec v3.3.0
+# VBE Codec v3.3.2
 
 A minimal, browser-only VBE encoder/decoder for static GitHub Pages hosting. No network upload, no backend, and no execution of visitor-supplied code. Interface text and all code comments are in English. VBE provides obfuscation, **not encryption**.
 
@@ -75,3 +75,32 @@ substitution/position error from an extra character near the checksum/footer.
 Unicode encode mismatch seen in the `windows-2022` runner on November 10, 2026.
 Windows compatibility is not established until the Windows job itself passes.
 Do not interpret JavaScript-only roundtrip tests as Windows execution proof.
+
+
+## v3.3.2 Windows native Unicode checksum fix
+
+The GitHub Actions Windows Script Host interoperability log on November 10, 2026
+found that the browser encoder generated checksum `m0IGAA==` (410267) for
+`WSH_Probe_Unicode_UTF16LE.vbs`, whereas Microsoft's `Scripting.Encoder`
+generated `rhcAAA==` (6062). The difference is exactly the sum of source
+UTF-16 code units >= 128. This release counts only source units below 128
+in both encoding and decoder metadata validation, matching this native test.
+
+All encoded body characters, including Unicode code points and intervening ASCII,
+were identical before the first checksum character in the reported case. The
+original ASCII test already passed.
+
+The native COM method returned one extra NUL code unit, apparently at the
+very end of the returned string (125 versus 124 units). The updated PowerShell
+harness detects and removes **only a trailing NUL after the final `^#~@` marker**
+for the text comparison and header inspection. It preserves the raw COM output
+for the independent native execution test and reports whether normalization
+was needed. A NUL elsewhere remains an error.
+
+A previous statement that v3.2 needed to sum all Unicode code units was
+incorrect. The native-runner experiment now provides the stronger oracle.
+
+**Compatibility status:** JavaScript regression tests and the exported mixed
+UTF-16 fixture are checked locally, but the GitHub `windows-2022` job must run
+again to confirm the fixed web VBE executes. UTF-8 VBE files and supplementary
+plane characters are not guaranteed to run in legacy Windows Script Host.

@@ -50,7 +50,8 @@ const VbeCodec = (() => {
 
   // VBE substitution works on Unicode code units, not encoded UTF-8 bytes.
   // Script Encoder declares the encoded body length, including both bytes of an escape.
-  // Source character positions advance only for ASCII characters, not non-ASCII code units.
+  // Non-ASCII UTF-16 code units neither advance the selector nor contribute to the checksum.
+  // This behavior is verified against the Windows Scripting.Encoder COM reference.
   const markers = /#@~\^(.{6}==)([\s\S]*?)(.{6}==)\^#~@/g;
   const escapeToChar = Object.freeze({ '#': '\r', '&': '\n', '!': '<', '*': '>', '$': '@' });
   const charToEscape = Object.freeze({ '\r': '#', '\n': '&', '<': '!', '>': '*', '@': '$' });
@@ -123,7 +124,7 @@ const VbeCodec = (() => {
     let checksum = 0;
     for (let i = 0; i < source.length; i++) {
       const code = source.charCodeAt(i);
-      checksum = (checksum + code) >>> 0;
+      if (code < 128) checksum = (checksum + code) >>> 0;
       const plain = source[i];
       if (Object.prototype.hasOwnProperty.call(charToEscape, plain)) {
         payload.push('@', charToEscape[plain]);
@@ -158,7 +159,7 @@ const VbeCodec = (() => {
       }
       plain += value;
       const plainCode = value.charCodeAt(0);
-      checksum = (checksum + plainCode) >>> 0;
+      if (plainCode < 128) checksum = (checksum + plainCode) >>> 0;
       if (plainCode < 128) selectorIndex++;
     }
     return { plain, checksum };

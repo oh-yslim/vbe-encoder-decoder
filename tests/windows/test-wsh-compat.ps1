@@ -113,7 +113,18 @@ try {
         $fileEncoding = [Text.Encoding]::ASCII
         if ($case.Encoding -eq 'Unicode') { $fileEncoding = [Text.Encoding]::Unicode }
         $sourceText = [IO.File]::ReadAllText($sourcePath, $fileEncoding)
-        $nativeText = [string]$encoder.EncodeScriptFile('.vbs', $sourceText, 0, '')
+        $nativeRaw = [string]$encoder.EncodeScriptFile('.vbs', $sourceText, 0, '')
+        $nativeText = $nativeRaw
+        # Some Scripting.Encoder COM versions append one terminal NUL after the closing marker.
+        # Normalize only that exact terminator for string comparison, never an embedded NUL.
+        if ($nativeText.EndsWith(('^#~@' + [char]0))) {
+            $nativeText = $nativeText.Substring(0, $nativeText.Length - 1)
+            Write-Host ($case.Name + ': NATIVE_TRAILING_NUL_NORMALIZED')
+        }
+        if ($nativeText.Contains([string][char]0)) {
+            $failed = $true
+            Write-Warning ($case.Name + ': NATIVE_INTERIOR_NUL at_index_0based=' + $nativeText.IndexOf([char]0))
+        }
         $webText = [IO.File]::ReadAllText($webPath, $fileEncoding)
 
         if ($nativeText -ceq $webText) {
@@ -134,7 +145,8 @@ try {
 
             # Compare Web VBE execution against Microsoft COM output in the same file encoding.
             $nativePath = Join-Path $tempDir ($case.Name + '_NATIVE.vbe')
-            [IO.File]::WriteAllText($nativePath, $nativeText, $fileEncoding)
+            # Execute the untouched native result to retain a true COM-generated reference.
+            [IO.File]::WriteAllText($nativePath, $nativeRaw, $fileEncoding)
             if (-not (Report-Execution ($case.Name + '/NATIVE') $nativePath $case.Expected)) {
                 $failed = $true
             }
