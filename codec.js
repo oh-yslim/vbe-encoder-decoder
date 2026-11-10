@@ -328,8 +328,193 @@ const VbeCodec = (() => {
     return Uint8Array.from(output);
   }
 
+  // Output format is based exclusively on the text, not its original file encoding.
+  // Check the entire text, including VBScript comments and quoted literals.
+  function chooseDownloadEncoding(text) {
+    if (typeof text !== 'string') throw new Error('Text input is required.');
+    validateScalarText(text);
+    return /^[\x00-\x7f]*$/.test(text) ? 'ascii' : 'utf-16le';
+  }
+
+  function validateSourceControls(text) {
+    validateScalarText(text);
+    for (let i = 0; i < text.length; i++) {
+      const unit = text.charCodeAt(i);
+      if ((unit < 32 && ![9, 10, 13].includes(unit)) || unit === 127 ||
+          (unit >= 128 && unit <= 159)) {
+        throw new Error(`Invalid source control character U+${unit.toString(16).toUpperCase().padStart(4, '0')} at position ${i + 1}.`);
+      }
+    }
+  }
+
+  function saveTextAuto(text) {
+    const encoding = chooseDownloadEncoding(text);
+    // Encoded VBE bodies may contain DEL (0x7f). Text is not a VBScript source
+    // until it has been decoded, so control validation happens separately.
+    const bytes = encoding === 'ascii'
+      ? Uint8Array.from(text, character => character.charCodeAt(0))
+      : encodeCharacters(text, 'utf-16le', true);
+    return { encoding, bytes, bom: encoding === 'utf-16le' };
+  }
+
+  function decodeUtf32(bytes, littleEndian, start) {
+    if ((bytes.length - start) % 4) throw new Error('Truncated UTF-32 data.');
+    const points = [];
+    for (let index = start; index < bytes.length; index += 4) {
+      const cp = littleEndian
+        ? ((bytes[index] | (bytes[index + 1] << 8) | (bytes[index + 2] << 16) | (bytes[index + 3] << 24)) >>> 0)
+        : (((bytes[index] << 24) | (bytes[index + 1] << 16) | (bytes[index + 2] << 8) | bytes[index + 3]) >>> 0);
+      if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+        throw new Error(`Invalid UTF-32 code point at byte ${index + 1}.`);
+      }
+      points.push(cp);
+    }
+    // Avoid stack overflow for large files.
+    let result = '';
+    for (let index = 0; index < points.length; index += 4096) {
+      result += String.fromCodePoint(...points.slice(index, index + 4096));
+    }
+    return result;
+  }
+
+  function encodeTextForDetection(text, charset) {
+    if (charset === 'windows-1252') return encodeCharacters(text, charset);
+    return encodeCharacters(text, charset);
+  }
+
+  function sameBytes(first, second) {
+    return first.length === second.length && first.every((byte, index) => byte === second[index]);
+  }
+
+  function plausibleScriptText(text) {
+    if (!text.length || text.includes('\ufffd')) return false;
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      if ((code < 32 && code !== 9 && code !== 10 && code !== 13) ||
+          (code >= 128 && code <= 159)) return false;
+    }
+    return true;
+  }
+
+  function scoreLegacyText(text, charset) {
+    let hangul = 0, kana = 0, han = 0, latin = 0, odd = 0;
+    for (const symbol of text) {
+      const cp = symbol.codePointAt(0);
+      if ((cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0x1100 && cp <= 0x11ff)) hangul++;
+      else if ((cp >= 0x3040 && cp <= 0x30ff) || (cp >= 0xff66 && cp <= 0xff9f)) kana++;
+      else if (cp >= 0x3400 && cp <= 0x9fff) han++;
+      else if ((cp >= 0xc0 && cp <= 0x024f) || cp === 0x20ac) latin++;
+      else if (cp > 127) odd++;
+    }
+    const tailored = charset === 'euc-kr' ? hangul * 8 :
+      charset === 'shift_jis' ? kana * 8 :
+      charset === 'windows-1252' ? latin * 7 :
+      (charset === 'gbk' || charset === 'big5') ? han * 2 : 0;
+    const mismatch = charset === 'euc-kr' ? kana * 2 :
+      charset === 'shift_jis' ? hangul * 2 :
+      charset === 'windows-1252' ? (han + hangul + kana) * 3 : hangul * 4 + kana * 3;
+    return tailored + han - mismatch - odd;
+  }
+
+  // Strict import: BOM and valid Unicode are deterministic. Legacy code pages
+  // are heuristic and are accepted only if there is one clear winning candidate.
+  // A roundtrip check prevents replacement-character corruption, but cannot
+  // mathematically prove which legacy code page was used.
+  function readFileAuto(bytes) {
+    if (!(bytes instanceof Uint8Array) || !bytes.length) throw new Error('The file is empty.');
+    const b = bytes;
+    const starts = (...values) => values.every((value, index) => b[index] === value);
+    let text, encoding, method;
+    if (b.length >= 4 && starts(0xff, 0xfe, 0, 0)) {
+      encoding = 'utf-32le'; text = decodeUtf32(b, true, 4); method = 'UTF-32 BOM';
+    } else if (b.length >= 4 && starts(0, 0, 0xfe, 0xff)) {
+      encoding = 'utf-32be'; text = decodeUtf32(b, false, 4); method = 'UTF-32 BOM';
+    } else if (b.length >= 3 && starts(0xef, 0xbb, 0xbf)) {
+      encoding = 'utf-8'; text = new TextDecoder('utf-8', { fatal: true }).decode(b); method = 'UTF-8 BOM';
+    } else if (b.length >= 2 && starts(0xff, 0xfe)) {
+      encoding = 'utf-16le'; text = new TextDecoder('utf-16le', { fatal: true }).decode(b); method = 'UTF-16 BOM';
+    } else if (b.length >= 2 && starts(0xfe, 0xff)) {
+      encoding = 'utf-16be'; text = new TextDecoder('utf-16be', { fatal: true }).decode(b); method = 'UTF-16 BOM';
+    } else if (b.every(value => value < 128 && value !== 0)) {
+      encoding = 'ascii';
+      // TextDecoder avoids argument count limits for long ASCII files.
+      text = new TextDecoder('utf-8', { fatal: true }).decode(b); method = 'ASCII bytes';
+    } else {
+      const size = b.length;
+      // Recognize BOM-free UTF-16/32 only when there are clear NUL alignment patterns.
+      if (size >= 12 && size % 4 === 0) {
+        const positions = [0, 0, 0, 0];
+        const count = Math.min(256, size);
+        for (let i = 0; i < count; i++) if (b[i] === 0) positions[i % 4]++;
+        const frames = count / 4;
+        const likely32le = positions[2] >= frames * 0.8 && positions[3] >= frames * 0.8;
+        const likely32be = positions[0] >= frames * 0.8 && positions[1] >= frames * 0.8;
+        if (likely32le !== likely32be) {
+          try {
+            text = decodeUtf32(b, likely32le, 0);
+            encoding = likely32le ? 'utf-32le' : 'utf-32be'; method = 'UTF-32 byte pattern';
+          } catch { /* Continue to other signatures. */ }
+        }
+      }
+      if (!encoding && size >= 8 && size % 2 === 0) {
+        let odd = 0, even = 0;
+        const count = Math.min(size, 512);
+        for (let i = 0; i < count; i++) {
+          if (b[i] === 0) { if (i % 2) odd++; else even++; }
+        }
+        if (odd >= 4 && odd > even * 5 || even >= 4 && even > odd * 5) {
+          const label = odd > even ? 'utf-16le' : 'utf-16be';
+          try { text = new TextDecoder(label, { fatal: true }).decode(b); encoding = label; method = 'UTF-16 byte pattern'; }
+          catch { /* Continue to UTF-8 or legacy candidates. */ }
+        }
+      }
+      if (!encoding) {
+        try {
+          text = new TextDecoder('utf-8', { fatal: true }).decode(b);
+          if (plausibleScriptText(text)) { encoding = 'utf-8'; method = 'Valid UTF-8'; }
+        } catch { /* Try legacy encodings. */ }
+      }
+      if (!encoding) {
+        if (b.includes(0)) throw new Error('Undetermined Unicode encoding or binary data. No lossy import was performed.');
+        const candidates = [];
+        for (const label of ['euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252']) {
+          try {
+            const candidate = decodeCharacters(b, label);
+            if (!plausibleScriptText(candidate)) continue;
+            if (!sameBytes(b, encodeTextForDetection(candidate, label))) continue;
+            candidates.push({ encoding: label, text: candidate, score: scoreLegacyText(candidate, label) });
+          } catch { /* Unsupported or irreversible encoding. */ }
+        }
+        candidates.sort((a, z) => z.score - a.score);
+        const winner = candidates[0];
+        if (!winner || winner.score < 8 || (candidates.length > 1 && winner.score - candidates[1].score < 7)) {
+          throw new Error('File encoding is ambiguous. The file was not imported to avoid corrupting its characters. Use a BOM-tagged Unicode source file.');
+        }
+        text = winner.text; encoding = winner.encoding; method = 'Heuristic legacy encoding (not guaranteed)';
+      }
+    }
+    validateScalarText(text);
+    if (!plausibleScriptText(text)) {
+      throw new Error('The file contains invalid text control characters or undecodable data.');
+    }
+    return { text, encoding, method, outputEncoding: chooseDownloadEncoding(text) };
+  }
+
+  function validateVbe(source) {
+    const result = decodeText(source, chooseDownloadEncoding(source) === 'ascii' ? 'utf-8' : 'utf-16le');
+    // Decode warnings remain warnings, never proof of a valid script or WSH execution.
+    let sourceControlWarning = null;
+    try { validateSourceControls(result.text); } catch (error) { sourceControlWarning = error.message; }
+    const warnings = [...result.warnings];
+    if (sourceControlWarning) warnings.push(sourceControlWarning);
+    return { blocks: result.blockCount, warnings, valid: !warnings.length,
+      recoveredEncoding: chooseDownloadEncoding(result.text) };
+  }
+
   return Object.freeze({ encodeText, decodeText, encodeBytes, decodeBytes,
-    encodeCharacters, decodeCharacters, detectEncoding });
+    encodeCharacters, decodeCharacters, detectEncoding, validateScalarText,
+    validateSourceControls, chooseDownloadEncoding, saveTextAuto,
+    readFileAuto, validateVbe });
 
 })();
 

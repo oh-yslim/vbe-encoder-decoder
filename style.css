@@ -54,3 +54,4 @@ footer p { margin: 6px 0 0; }
   #message { color: #83ddb4; }
   #message.error { color: #ffa5a0; }
 }
+.encoding-info { color: var(--accent); font-size: 12px; font-weight: 650; margin: 9px 0 3px; line-height: 1.6; overflow-wrap: anywhere; }

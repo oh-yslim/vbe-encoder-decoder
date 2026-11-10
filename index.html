@@ -4,76 +4,55 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Client-side VBE encoder and decoder with VBE-format header validation and Unicode-aware character processing.">
+  <meta name="description" content="Privacy-first, browser-only VBE encoder and decoder with automatic Unicode-safe downloads.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.3.2">
-  <script src="./codec.js?v=3.3.2" defer></script>
-  <script src="./app.js?v=3.3.2" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.4.0">
+  <script src="./codec.js?v=3.4.0" defer></script>
+  <script src="./app.js?v=3.4.0" defer></script>
 </head>
 <body>
   <main class="wrap">
     <header class="hero">
-      <div class="eyebrow">100% CLIENT-SIDE · NO EXTERNAL DEPENDENCIES</div>
+      <div class="eyebrow">BROWSER-ONLY · NO BACKEND · NO SCRIPT EXECUTION</div>
       <h1>VBE Codec</h1>
       <p>Encode and decode Microsoft Script Encoder <code>.vbs</code> and <code>.vbe</code> files.</p>
-      <div class="privacy">✓ No file uploads to servers &nbsp; ✓ No backend &nbsp; ✓ No script execution</div>
+      <div class="privacy">✓ Files stay in your browser &nbsp; ✓ No manual output encoding &nbsp; ✓ Windows compatibility tested separately</div>
     </header>
 
     <section class="panel" aria-labelledby="sourceTitle">
       <div class="section-heading">
-        <h2 id="sourceTitle">1. Source</h2>
+        <h2 id="sourceTitle">1. Input</h2>
         <div class="sample-group">
-          <button type="button" class="text-button" id="samplePlain">Plain sample</button>
+          <button type="button" class="text-button" id="samplePlain">ASCII sample</button>
           <button type="button" class="text-button" id="sampleEncoded">VBE sample</button>
           <button type="button" class="text-button" id="sampleUnicode">Unicode sample</button>
         </div>
       </div>
       <div class="controls">
-        <label class="file-picker">Choose file
-          <input id="upload" type="file" accept=".vbs,.vbe,.jse,.js,.txt,text/plain">
-        </label>
-        <label class="select-wrap">Read uploaded file as
-          <select id="inputEncoding">
-            <option value="auto">Auto (UTF-8 first; manually select legacy encodings)</option>
-            <option value="utf-8">UTF-8 (full Unicode; Windows Script Host compatibility not guaranteed)</option>
-            <option value="euc-kr">CP949 / Korean Windows</option>
-            <option value="shift_jis">CP932 / Shift-JIS / Japanese Windows</option>
-            <option value="gbk">CP936 / GBK / Simplified Chinese Windows</option>
-            <option value="big5">CP950 / Big5 / Traditional Chinese Windows</option>
-            <option value="windows-1252">CP1252 / Western European Windows</option>
-            <option value="utf-16le">UTF-16 LE</option>
-            <option value="utf-16be">UTF-16 BE</option>
-          </select>
-        </label>
-        <label class="select-wrap">Save result as
-          <select id="outputEncoding">
-            <option value="match">Same as input (UTF-8 for pasted text)</option>
-            <option value="utf-8">UTF-8 (Unicode)</option>
-            <option value="utf-16le">UTF-16 LE + BOM (Unicode)</option>
-            <option value="euc-kr">CP949 (Korean)</option>
-            <option value="shift_jis">CP932 (Japanese)</option>
-            <option value="gbk">CP936 (Chinese Simplified)</option>
-            <option value="big5">CP950 (Chinese Traditional)</option>
-            <option value="windows-1252">CP1252 (Western European)</option>
-          </select>
+        <label class="file-picker">Choose .vbs / .vbe file
+          <input id="upload" type="file" accept=".vbs,.vbe,.txt,.jse,.js,text/plain">
         </label>
       </div>
-      <p class="muted help">File input is decoded using the selected character set. Pasted text is already Unicode. Save result encoding is chosen separately. Legacy code pages cannot contain all Unicode characters; encoding fails rather than replacing them. Auto-detection of legacy files is unreliable.</p>
+      <p class="muted help">Files are read using BOM/Unicode checks and guarded legacy-code-page detection. Ambiguous inputs are rejected rather than silently misdecoded. Download encoding is chosen from the current text, not the original file format.</p>
       <label for="input" class="field-label">Or paste text</label>
       <textarea id="input" spellcheck="false" translate="no" placeholder="Paste VBScript source or #@~^...^#~@ VBE content."></textarea>
+      <p id="inputMeta" class="encoding-info" aria-live="polite">Download encoding: ASCII (when the input is ASCII-only), otherwise UTF-16 LE with BOM.</p>
       <div class="actions">
         <button type="button" id="encode" class="primary">Encode → .vbe</button>
         <button type="button" id="decode" class="secondary">Decode → .vbs</button>
+        <button type="button" id="validate">Validate VBE</button>
+        <button type="button" id="downloadInput" disabled>Download Input</button>
         <button type="button" id="clear">Clear</button>
       </div>
     </section>
 
     <section class="panel" aria-labelledby="resultTitle">
-      <div class="section-heading"><h2 id="resultTitle">2. Result</h2><span class="muted">Scripts are never executed</span></div>
+      <div class="section-heading"><h2 id="resultTitle">2. Result</h2><span class="muted">Text is never executed</span></div>
       <textarea id="output" aria-label="Conversion result" readonly spellcheck="false" translate="no" placeholder="The converted result appears here."></textarea>
+      <p id="resultMeta" class="encoding-info">Result download encoding: —</p>
       <div class="actions">
-        <button type="button" id="copy" disabled>Copy result</button>
-        <button type="button" id="download" disabled>Download file</button>
+        <button type="button" id="copy" disabled>Copy Result</button>
+        <button type="button" id="download" disabled>Download Result</button>
       </div>
       <p id="message" role="status" aria-live="polite">Choose Encode or Decode.</p>
       <p id="details" class="muted" aria-live="polite"></p>
@@ -81,8 +60,9 @@
 
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
-      <p>VBE headers are checked against independent published examples. UTF-8 roundtrips do not guarantee Windows Script Host execution. CP949 and other legacy code pages cannot represent every Unicode character; choose UTF-8 for lossless text conversion or UTF-16 LE for Windows Unicode file encoding. Test VBE execution separately.</p>
-      <p>v3.3.2 · All processing takes place in your browser.</p>
+      <p>Downloads: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. Invalid source controls and unpaired surrogates are rejected.</p>
+      <p>Validation checks format and metadata only. It cannot execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
+      <p>v3.4.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

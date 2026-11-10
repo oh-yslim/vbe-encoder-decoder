@@ -7,7 +7,8 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $fixtures = Join-Path $root 'test-samples'
 $cases = @(
     @{ Name = 'ASCII'; Source = 'WSH_Probe_ASCII.vbs'; Encoded = 'WSH_Probe_ASCII.vbe'; Encoding = 'ASCII'; Expected = 'VBE_WSH_ASCII_PASS' },
-    @{ Name = 'Unicode'; Source = 'WSH_Probe_Unicode_UTF16LE.vbs'; Encoded = 'WSH_Probe_Unicode_UTF16LE.vbe'; Encoding = 'Unicode'; Expected = 'VBE_WSH_UNICODE_PASS' }
+    @{ Name = 'Unicode'; Source = 'WSH_Probe_Unicode_UTF16LE.vbs'; Encoded = 'WSH_Probe_Unicode_UTF16LE.vbe'; Encoding = 'Unicode'; Expected = 'VBE_WSH_UNICODE_PASS' },
+    @{ Name = 'UnicodeComment'; Source = 'WSH_Probe_Unicode_Comments_UTF16LE.vbs'; Encoded = 'WSH_Probe_Unicode_Comments_UTF16LE.vbe'; Encoding = 'Unicode'; Expected = 'VBE_WSH_UNICODE_COMMENT_PASS' }
 )
 
 function Get-UnitLabel([string]$value, [int]$index) {

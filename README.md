@@ -1,106 +1,98 @@
-# VBE Codec v3.3.2
+# VBE Codec v3.4.0
 
-A minimal, browser-only VBE encoder/decoder for static GitHub Pages hosting. No network upload, no backend, and no execution of visitor-supplied code. Interface text and all code comments are in English. VBE provides obfuscation, **not encryption**.
+A self-contained Microsoft Script Encoder (`.vbs` / `.vbe`) tool for GitHub Pages. There is **no backend, no external JavaScript dependency, and no execution of submitted VBScript**. The interface, documentation, and source comments are in English. The project is an independently authored browser implementation of the publicly described VBE format, not a fork of the PowerShell repository.
 
-## Critical v3.3.0 fix
+VBE is **obfuscation, not encryption**. Do not execute untrusted scripts.
 
-v3.2.0 stored the **unescaped plaintext length** in the VBE header. Microsoft Script Encoder stores the length of the **encoded payload**; `@#` and `@&` must each count as two payload characters. That error means an internal roundtrip can pass even when Windows Script Host rejects the generated VBE. The new encoder uses encoded-payload length; the decoder validates against it.
+## What changed in v3.4.0
 
-This distinction is independently checked with a previously published executable sample by Didier Stevens/SANS (2016). The source has 40 characters, and the encoded body has 42 characters. Its header declares `KgAAAA==` (42), not `KAAAAA==` (40). The sample and another independent sample from Virus Bulletin are included in `tests/fixtures/`.
+- **Download Input** and **Download Result** are separate actions.
+- **No output code-page dropdown.** The text content alone determines download encoding:
+  - If *every* character is in `U+0000`–`U+007F`, save ASCII without a BOM.
+  - If *any* character is outside that range, save UTF-16 little-endian with exactly one `FF FE` BOM.
+  - The entire text is analyzed, including **VBScript comments**, string literals, identifiers, Chinese/Japanese/Korean characters, Latin accents, and emoji.
+- ASCII/UTF-16LE choice is applied **independently** to Input and Result exports. Uploading an ASCII-only UTF-32 source and downloading Input yields ASCII.
+- Invalid source control characters are rejected (TAB, CR, and LF are allowed), and unpaired UTF-16 surrogates are rejected. Encoded `.vbe` data may legitimately contain `DEL` (U+007F), which is not incorrectly rejected during file import.
+- File imports use original bytes: BOM first, then strong UTF-16/UTF-32 byte patterns, strict UTF-8, and finally conservative, verified legacy code-page detection. Ambiguous legacy encodings produce an error instead of a silent replacement.
+- An uploaded file's full decoded content (including CRLF) is retained until edited, even if the browser textarea displays normalized newlines.
+- A **Validate VBE** button checks marker format, decoded length/checksum warnings, and source control characters. This is **not** a Windows Script Host execution test.
+- Windows interoperability tests retain the native `Scripting.Encoder` COM reference. A new Unicode-comments-only fixture is checked against the native encoder and executed with `cscript.exe` on GitHub's Windows runner.
+- `Encode (WSH-safe)` and all `ChrW()` source-rewriting features remain absent.
 
-## Test separation
+## Output examples
 
-- `tests/test-independent.js`: independently published encoded VBE vectors and the entire ASCII substitution alphabet transcribed as values from a separate `scrdec` implementation. Validates 97 alphabet positions across each of the three selector states.
-- `tests/test.js`: internal ASCII-only, Unicode-only, mixed Unicode/ASCII, escaped punctuation, metadata, character sets, file byte checks, and damaged headers.
-- `tests/windows/test-wsh-compat.ps1`: Windows-only test comparing bundled harmless probes with the native `Scripting.Encoder.EncodeScriptFile` COM interface and then executing only those locally bundled probes through Windows Script Host. No arbitrary user-supplied script is executed by the test harness.
+| Source content | Download encoding |
+| --- | --- |
+| `WScript.Echo "Hello"` | ASCII, no BOM |
+| `WScript.Echo "Hello"` plus `' 한글` comment | UTF-16 LE, BOM |
+| `' 日本語 / 中文 / Café / 😀` | UTF-16 LE, BOM |
+| Unicode source pasted from an old UTF-32 file | ASCII if text is ASCII-only; UTF-16LE otherwise |
 
-## Test commands
+This rule is about **download file encoding**, not the JavaScript string representation or the encoding originally used to read an uploaded file. It is a deliberate Windows Script Host interoperability preference. UTF-8 can represent all valid Unicode characters; using UTF-16LE here is not because UTF-8 lacks coverage.
 
-Run local and GitHub Actions tests (Node.js 22):
+## Reading files and auto-detection limits
+
+`Read uploaded file as` and `Save result as` manual menus were removed. The importer checks:
+
+1. UTF-32 LE/BE BOM, UTF-8 BOM, UTF-16 LE/BE BOM.
+2. ASCII bytes (not including NUL) and likely BOM-less UTF-32/UTF-16 byte patterns.
+3. Strict UTF-8 (`TextDecoder` with `fatal: true`).
+4. Legacy CP949, Shift-JIS, GBK, Big5, or Windows-1252 only if the decoded content is plausible, re-encodes to exactly the same bytes, and a language-based heuristic identifies one clear candidate.
+
+**Important limitations:** No library, strict parser, or round-trip check can always establish the original encoding of a BOM-less legacy text file. Multiple code pages may yield different valid strings from the same bytes. This application refuses uncertain files. To use such a file, convert it to a BOM-marked UTF-16/UTF-32 or a valid UTF-8 file with a trusted text editor *before* importing. Legacy detection is a conservative heuristic, not a general-purpose `chardet` replacement.
+
+An uploaded file is **not downloaded unchanged** using `Download Input`: its text is exported in the new automatic encoding. An existing signature/BOM is removed during decoding and the automatic export adds a BOM only for UTF-16LE. This is intentional.
+
+## Source structure
+
+```text
+index.html
+style.css
+codec.js
+app.js
+.nojekyll
+README.md
+tests/test-auto-io.js
+tests/test-ui.js
+tests/test-independent.js
+tests/test.js
+tests/windows/test-wsh-compat.ps1
+test-samples/WSH_Probe_*.vbs
+
+test-samples/WSH_Probe_*.vbe
+.github/workflows/test.yml
+```
+
+## GitHub Pages deployment
+
+1. Create a **public** repository (`vbe-codec` recommended) or open your existing repository.
+2. Extract the ZIP and upload **the extracted files**, including the `.github` folder, to the repository root. Replace old files with the same names. Prefer `github.dev` to stage additions, changes, and deletions in a single commit.
+3. Under **Settings → Pages**, choose **Deploy from a branch**, `main`, and `/(root)`.
+4. Commit. Pages deploys the static site. The GitHub Actions workflow runs tests separately and **does not block branch-based Pages deployment**.
+
+To run automated tests locally with Node.js 22+:
 
 ```sh
 node --test tests/*.js
 ```
 
-Run the independent Windows compatibility test in **Windows PowerShell 5.1** from the extracted package directory:
+For Windows native-reference and real WSH execution tests (run only with trusted bundled fixtures):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test-wsh-compat.ps1
 ```
 
-The GitHub Actions workflow also runs this harness on `windows-2022`; the native Windows outcome cannot be claimed until that job completes. The Windows test requires the COM `Scripting.Encoder` object to be available. If unavailable, it reports `NATIVE_ENCODER_UNAVAILABLE` rather than pretending interoperability passed. It separately reports `NATIVE_ENCODE_MATCH`, `ENCODE_MISMATCH`, `WSH_EXECUTION_PASS` and `WSH_EXECUTION_FAIL`.
+Do not pass untrusted visitor scripts to GitHub Actions or invoke `cscript.exe` from the browser. A browser-only GitHub Pages website cannot execute Windows Script Host locally.
 
-**Important**: This package has **not** been run on a real Windows Script Host in the build environment, so interoperability is still pending until the Windows test is run. The `.vbe` files under `test-samples/WSH_Probe_*` are generated by this web codec and are *not* Microsoft-generated independent golden fixtures.
+## Verification status
 
-## Unicode/legacy encodings
+- Published independent ASCII VBE decoding/encoding fixtures: included in automated tests.
+- JavaScript tests cover Unicode only in comments, Unicode strings, emoji, ASCII, CRLF, UTF-32 imports, CP949 input, and VBE metadata.
+- Browser UI was manually exercised in a Chromium sandbox using no network: ASCII and Unicode exports, Input/Result download, upload, Encode, and Decode.
+- The **Windows interoperability job has not been run for this release in this development environment**. It must pass on GitHub Actions before compatibility is claimed for the newly added Unicode-comment fixture. Even a passing fixture suite does not guarantee arbitrary user scripts are safe or executable.
 
-Script Encoder substitutes ASCII characters, leaves non-ASCII Unicode characters untransformed, and preserves the source order. UTF-8 can preserve a broad Unicode source for web encode/decode, but legacy Windows Script Host generally expects ANSI or UTF-16LE for `.vbe` files. For mixed Hangul/Japanese/Chinese, start with UTF-16LE output. If you choose CP949, CP932, CP936, CP950 or CP1252 and the source contains an unrepresentable character, conversion fails instead of silently replacing it.
+### Relevant references
 
-The Unicode checksum rule and supplementary-plane characters require native compatibility checks; self-consistency alone is insufficient. Do not interpret successful browser roundtrips as proof of universal Windows execution. The provided tests target this distinction.
-
-## Deploy to GitHub Pages
-
-Upload the **contents** of this archive to the repository root. Replace previous `index.html`, `codec.js`, `app.js`, `style.css`, `README.md`, `.nojekyll`, `.github/workflows/test.yml`, `tests/` and `test-samples/`, deleting outdated files. Use Settings → Pages → Deploy from a branch → main → /(root). The GitHub Actions workflow runs tests but does not block this form of Pages deployment.
-
-## References
-
-- [Didier Stevens, SANS 2016: VBS + VBE](https://isc.sans.edu/diary/VBS%2BVBE/20953/)
-- [Peter Ferrie, Virus Bulletin 2006: Inside the Microsoft script encoder](https://www.virusbulletin.com/virusbulletin/2006/01/inside-microsoft-script-encoder/)
-- [MrBrownstone scrdec v1.8 alphabet (2000-2005)](https://gist.github.com/davidruhmann/5843275)
-- [Didier Stevens' public-domain VBE decoder](https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py)
-
-The published SANS article displays the encoded TAB as web-formatted whitespace; the fixture normalizes this single position to TAB (0x09) so the encoded data is reproducible. All header values and other encoded characters match the published example.
-
-
-## v3.3.1 Windows interop diagnostic hotfix
-
-The Windows Script Host regression harness no longer uses `//B`, which suppresses
-`WScript.Echo` and previously caused an erroneous ASCII `WSH_EXECUTION_FAIL`
-with exit code `0` and blank output. The runner now explicitly uses interactive
-`//I`, `//nologo`, and a 10-second timeout.
-
-For each checked-in benign probe, Windows tests three different files:
-
-1. The original `.vbs` source (`ASCII/SOURCE` or `Unicode/SOURCE`).
-2. The web codec's `.vbe` (`ASCII/WEB` or `Unicode/WEB`).
-3. A temporary `.vbe` generated by Microsoft's `Scripting.Encoder` COM component
-   (`ASCII/NATIVE` or `Unicode/NATIVE`).
-
-The test compares complete encoded UTF-16 strings and prints the **first differing
-UTF-16 code-unit index, nearby hexadecimal code-unit values, and both header
-length/checksum fields**. That extra information is needed to distinguish a
-substitution/position error from an extra character near the checksum/footer.
-
-**Important:** This is a diagnostics-only update; it does not claim to fix the
-Unicode encode mismatch seen in the `windows-2022` runner on November 10, 2026.
-Windows compatibility is not established until the Windows job itself passes.
-Do not interpret JavaScript-only roundtrip tests as Windows execution proof.
-
-
-## v3.3.2 Windows native Unicode checksum fix
-
-The GitHub Actions Windows Script Host interoperability log on November 10, 2026
-found that the browser encoder generated checksum `m0IGAA==` (410267) for
-`WSH_Probe_Unicode_UTF16LE.vbs`, whereas Microsoft's `Scripting.Encoder`
-generated `rhcAAA==` (6062). The difference is exactly the sum of source
-UTF-16 code units >= 128. This release counts only source units below 128
-in both encoding and decoder metadata validation, matching this native test.
-
-All encoded body characters, including Unicode code points and intervening ASCII,
-were identical before the first checksum character in the reported case. The
-original ASCII test already passed.
-
-The native COM method returned one extra NUL code unit, apparently at the
-very end of the returned string (125 versus 124 units). The updated PowerShell
-harness detects and removes **only a trailing NUL after the final `^#~@` marker**
-for the text comparison and header inspection. It preserves the raw COM output
-for the independent native execution test and reports whether normalization
-was needed. A NUL elsewhere remains an error.
-
-A previous statement that v3.2 needed to sum all Unicode code units was
-incorrect. The native-runner experiment now provides the stronger oracle.
-
-**Compatibility status:** JavaScript regression tests and the exported mixed
-UTF-16 fixture are checked locally, but the GitHub `windows-2022` job must run
-again to confirm the fixed web VBE executes. UTF-8 VBE files and supplementary
-plane characters are not guaranteed to run in legacy Windows Script Host.
+- Microsoft Script Encoder / `Scripting.Encoder` COM interface (native reference available in Windows runner)
+- Didier Stevens' public-domain VBE decoder: <https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py>
+- Web Encoding API: <https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder>

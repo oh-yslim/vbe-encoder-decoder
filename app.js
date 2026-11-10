@@ -1,177 +1,233 @@
-/* Browser-only VBE encoder/decoder UI. User scripts are never executed. */
+/* Browser-only UI. User-supplied scripts are never executed. */
 (() => {
   'use strict';
 
-  const element = (id) => document.getElementById(id);
-  const input = element('input');
-  const output = element('output');
-  const upload = element('upload');
-  const inputEncoding = element('inputEncoding');
-  const outputEncoding = element('outputEncoding');
-  const message = element('message');
-  const details = element('details');
-  let fileBytes = null;
+  const node = (id) => document.getElementById(id);
+  const input = node('input');
+  const output = node('output');
+  const upload = node('upload');
+  const message = node('message');
+  const details = node('details');
+  const inputMeta = node('inputMeta');
+  const resultMeta = node('resultMeta');
+  const names = { ascii: 'ASCII', 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16 LE with BOM',
+    'utf-16be': 'UTF-16 BE', 'utf-32le': 'UTF-32 LE', 'utf-32be': 'UTF-32 BE',
+    'euc-kr': 'CP949', shift_jis: 'Shift-JIS / CP932', gbk: 'GBK / CP936',
+    big5: 'Big5 / CP950', 'windows-1252': 'Windows-1252' };
+  const label = (value) => names[value] || value;
+  let originalText = null;
+  let originalReadInfo = null;
   let fileName = 'script';
   let result = null;
   let lastMode = 'decode';
-  const charsetNames = { 'utf-8': 'UTF-8', 'euc-kr': 'CP949', 'shift_jis': 'CP932/Shift-JIS', 'gbk': 'CP936/GBK', 'big5': 'CP950/Big5', 'windows-1252': 'CP1252', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE' };
-  const charsetName = (value) => charsetNames[value] || value;
 
-  function setStatus(text, error = false) {
+  function status(text, error = false) {
     message.textContent = text;
     message.classList.toggle('error', error);
   }
 
-  function resetResult() {
+  function sourceText() {
+    // A textarea normalizes CRLF to LF when exposed through .value. Keep original
+    // bytes' decoded text untouched until the user edits the input.
+    return originalText === null ? input.value : originalText;
+  }
+
+  function outputEncoding(text) {
+    return VbeCodec.chooseDownloadEncoding(text);
+  }
+
+  function clearResult() {
     result = null;
     output.value = '';
     details.textContent = '';
-    element('copy').disabled = true;
-    element('download').disabled = true;
+    resultMeta.textContent = 'Result download encoding: —';
+    node('copy').disabled = true;
+    node('download').disabled = true;
   }
 
-  function selectedInputEncoding() {
-    return inputEncoding.value === 'auto'
-      ? (fileBytes ? VbeCodec.detectEncoding(fileBytes) : 'utf-8')
-      : inputEncoding.value;
-  }
-
-  function selectedOutputEncoding() {
-    return outputEncoding.value === 'match'
-      ? (fileBytes ? selectedInputEncoding() : 'utf-8')
-      : outputEncoding.value;
-  }
-
-  function updateFilePreview() {
-    if (!fileBytes) return;
-    const charset = selectedInputEncoding();
-    resetResult();
+  function refreshInputMeta() {
+    const value = sourceText();
+    node('downloadInput').disabled = value.length === 0;
     try {
-      input.value = VbeCodec.decodeCharacters(fileBytes, charset);
-      setStatus(`File loaded. Text encoding: ${charsetName(charset)}. Change the selection if the preview looks incorrect.`);
+      const chosen = outputEncoding(value);
+      const reading = originalReadInfo
+        ? `File read as ${label(originalReadInfo.encoding)} (${originalReadInfo.method}). `
+        : 'Text input. ';
+      inputMeta.textContent = `${reading}Input download encoding: ${label(chosen)}. (All characters, including comments, are considered.)`;
     } catch (error) {
-      input.value = '';
-      setStatus(`Cannot display this file with the selected encoding: ${error.message}`, true);
+      inputMeta.textContent = `Input cannot be saved: ${error.message}`;
+      node('downloadInput').disabled = true;
     }
   }
 
   upload.addEventListener('change', async () => {
-    const file = upload.files && upload.files[0];
+    const file = upload.files?.[0];
     if (!file) return;
+    clearResult();
+    originalText = null;
+    originalReadInfo = null;
     if (file.size > 10 * 1024 * 1024) {
       upload.value = '';
-      setStatus('Please select a file smaller than 10 MB.', true);
+      status('File exceeds the 10 MB limit.', true);
+      refreshInputMeta();
       return;
     }
     try {
-      fileBytes = new Uint8Array(await file.arrayBuffer());
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const loaded = VbeCodec.readFileAuto(bytes);
+      originalText = loaded.text;
+      originalReadInfo = loaded;
       fileName = (file.name.replace(/\.[^.]+$/, '') || 'script').replace(/[\\/:*?"<>|]/g, '_');
-      updateFilePreview();
+      input.value = loaded.text;
+      refreshInputMeta();
+      status(`File loaded as ${label(loaded.encoding)}. Input is ready for conversion.`);
+      if (loaded.method.startsWith('Heuristic')) {
+        details.textContent = 'Warning: Legacy code-page detection is probabilistic. Review the displayed text before converting.';
+      }
     } catch (error) {
-      setStatus(`Could not read the file: ${error.message}`, true);
+      originalText = null;
+      originalReadInfo = null;
+      input.value = '';
+      upload.value = '';
+      refreshInputMeta();
+      status(`Import rejected: ${error.message}`, true);
     }
   });
 
   input.addEventListener('input', () => {
-    fileBytes = null;
+    originalText = null;
+    originalReadInfo = null;
     upload.value = '';
-    resetResult();
-    setStatus('Choose Encode or Decode.');
+    clearResult();
+    refreshInputMeta();
+    status('Choose Encode or Decode.');
   });
-  inputEncoding.addEventListener('change', updateFilePreview);
-  outputEncoding.addEventListener('change', resetResult);
 
-  function convert(mode) {
-    resetResult();
+  function run(mode) {
+    clearResult();
     lastMode = mode;
     try {
-      if (!fileBytes && !input.value) throw new Error('Select a file or enter text.');
-      const charset = selectedOutputEncoding();
-      const sourceText = fileBytes
-        ? VbeCodec.decodeCharacters(fileBytes, selectedInputEncoding())
-        : input.value;
+      let text = sourceText();
+      if (!text) throw new Error('Select a file or enter text.');
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+      if (mode === 'encode') VbeCodec.validateSourceControls(text);
+      const target = outputEncoding(text);
+      const codecEncoding = target === 'ascii' ? 'utf-8' : target;
       result = mode === 'encode'
-        ? VbeCodec.encodeText(sourceText, charset)
-        : VbeCodec.decodeText(sourceText, charset);
-
+        ? VbeCodec.encodeText(text, codecEncoding)
+        : VbeCodec.decodeText(text, codecEncoding);
+      if (mode === 'decode') VbeCodec.validateSourceControls(result.text);
+      // The decoded text may be all-ASCII even if the encoded input was Unicode,
+      // or vice versa. Always select the result's encoding independently.
+      const bytes = VbeCodec.saveTextAuto(result.text);
+      result.bytes = bytes.bytes;
+      result.encoding = bytes.encoding;
       output.value = result.text;
-      element('copy').disabled = false;
-      element('download').disabled = false;
-      const ext = mode === 'decode' ? '.vbs' : '.vbe';
-      element('download').textContent = `Download ${ext}`;
-      const charsetLabel = charsetName(result.encoding);
-      setStatus(mode === 'encode'
-        ? `VBE encoding completed (${charsetLabel}).`
-        : `Decoded ${result.blockCount} VBE block(s) (${charsetLabel}).`);
+      const ext = mode === 'encode' ? '.vbe' : '.vbs';
+      node('copy').disabled = false;
+      node('download').disabled = false;
+      node('download').textContent = `Download Result ${ext}`;
+      resultMeta.textContent = `Result download encoding: ${label(result.encoding)}.`;
+      status(mode === 'encode'
+        ? `VBE created. Download format: ${label(result.encoding)}.`
+        : `Decoded ${result.blockCount} VBE block(s). Download format: ${label(result.encoding)}.`);
       details.textContent = result.warnings.length
-        ? `Notice: ${result.warnings.join(' / ')}`
-        : mode === 'decode'
-          ? 'No validation warnings. Decoding does not prove the original script is safe to execute.'
-          : 'You can copy the result or save it to a file.';
+        ? `Validation warning: ${result.warnings.join(' / ')}`
+        : 'No metadata warnings. Windows Script Host execution has not been tested.';
     } catch (error) {
-      setStatus(`Conversion failed: ${error.message}`, true);
+      status(`Conversion failed: ${error.message}`, true);
     }
   }
 
-  element('encode').addEventListener('click', () => convert('encode'));
-  element('decode').addEventListener('click', () => convert('decode'));
+  node('encode').addEventListener('click', () => run('encode'));
+  node('decode').addEventListener('click', () => run('decode'));
+  node('validate').addEventListener('click', () => {
+    try {
+      const validation = VbeCodec.validateVbe(sourceText());
+      status(validation.valid
+        ? `VBE validation passed for ${validation.blocks} block(s). This is not an execution test.`
+        : `VBE validation found ${validation.warnings.length} warning(s).`, !validation.valid);
+      details.textContent = validation.warnings.length
+        ? validation.warnings.join(' / ')
+        : `Recovered source download encoding: ${label(validation.recoveredEncoding)}. Windows execution: Not tested.`;
+    } catch (error) {
+      status(`VBE validation failed: ${error.message}`, true);
+      details.textContent = '';
+    }
+  });
 
-  element('copy').addEventListener('click', async () => {
+  node('copy').addEventListener('click', async () => {
     if (!result) return;
     try {
       await navigator.clipboard.writeText(result.text);
-      setStatus('Result copied to clipboard.');
+      status('Result copied.');
     } catch {
       output.focus();
       output.select();
-      setStatus('Automatic copying was blocked. Press Ctrl+C to copy the selected result.', true);
+      status('Clipboard access was blocked. Press Ctrl+C to copy the selected text.', true);
     }
   });
 
-  element('download').addEventListener('click', () => {
-    if (!result) return;
-    const ext = lastMode === 'decode' ? '.vbs' : '.vbe';
-    const blob = new Blob([result.bytes], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
+  function download(bytes, name) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${fileName}${ext}`;
+    link.download = name;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus(`${ext} download started. Result encoding: ${charsetName(result.encoding)}.`);
-  });
-
-  element('clear').addEventListener('click', () => {
-    input.value = '';
-    upload.value = '';
-    fileBytes = null;
-    fileName = 'script';
-    resetResult();
-    setStatus('Input and result cleared.');
-  });
-
-  function setSample(text, sampleName) {
-    input.value = text;
-    upload.value = '';
-    fileBytes = null;
-    fileName = sampleName;
-    inputEncoding.value = 'auto';
-    outputEncoding.value = 'utf-8';
-    resetResult();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  element('samplePlain').addEventListener('click', () => {
-    setSample('MsgBox "Hello"', 'example');
-    setStatus('Plain text sample loaded. Select Encode.');
+  node('downloadInput').addEventListener('click', () => {
+    try {
+      const text = sourceText();
+      if (!text) throw new Error('Input is empty.');
+      if (!text.includes('#@~^')) VbeCodec.validateSourceControls(text);
+      const stored = VbeCodec.saveTextAuto(text);
+      const isVbe = text.includes('#@~^') && text.includes('^#~@');
+      download(stored.bytes, `${fileName}${isVbe ? '.vbe' : '.vbs'}`);
+      status(`Input saved as ${label(stored.encoding)}. This is a text-based export, not an unchanged original-byte copy.`);
+    } catch (error) { status(`Download failed: ${error.message}`, true); }
   });
-  element('sampleEncoded').addEventListener('click', () => {
-    setSample('#@~^DgAAAA==\\ko$K6,JC\x7fV^GJqAQAAA==^#~@', 'example');
-    setStatus('VBE example loaded. Select Decode.');
+
+  node('download').addEventListener('click', () => {
+    if (!result) return;
+    const extension = lastMode === 'encode' ? '.vbe' : '.vbs';
+    download(result.bytes, `${fileName}${extension}`);
+    status(`Result saved as ${label(result.encoding)}.`);
   });
-  element('sampleUnicode').addEventListener('click', () => {
-    setSample('Option Explicit\r\nWScript.Echo "한글 日本語 简体中文 繁體中文 Café Ελληνικά Русский 😀 🚀 ∑ ∞"\r\n', 'unicode-test');
-    setStatus('Unicode source loaded. Use UTF-8 or UTF-16 LE; legacy encodings cannot represent all characters.');
+
+  function sample(text, name, notice) {
+    originalText = text;
+    originalReadInfo = null;
+    input.value = text;
+    upload.value = '';
+    fileName = name;
+    clearResult();
+    refreshInputMeta();
+    status(notice);
+  }
+
+  node('clear').addEventListener('click', () => {
+    originalText = null;
+    originalReadInfo = null;
+    input.value = '';
+    upload.value = '';
+    fileName = 'script';
+    clearResult();
+    refreshInputMeta();
+    status('Input and result cleared.');
   });
+  node('samplePlain').addEventListener('click', () => sample(
+    'Option Explicit\r\nWScript.Echo "Hello, 123"\r\n', 'ascii-test',
+    'ASCII VBScript example loaded.'));
+  node('sampleEncoded').addEventListener('click', () => sample(
+    '#@~^DgAAAA==\\ko$K6,JC\x7fV^GJqAQAAA==^#~@', 'known-vbe',
+    'Independent reference VBE sample loaded.'));
+  node('sampleUnicode').addEventListener('click', () => sample(
+    'Option Explicit\r\n\' 한글 / 日本語 / 中文 / Café / Emoji 😀 🚀\r\nWScript.Echo "Hello"\r\n',
+    'unicode-comment-test', 'Unicode-in-comments test loaded. Download uses UTF-16 LE with BOM.'));
+
+  refreshInputMeta();
 })();
