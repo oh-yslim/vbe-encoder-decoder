@@ -22,3 +22,12 @@ jobs:
           node-version: '22'
       - name: Run codec regression tests
         run: node --test tests/*.js
+
+  windows-wsh-interop:
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Compare with native Script Encoder and test Windows Script Host
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test-wsh-compat.ps1

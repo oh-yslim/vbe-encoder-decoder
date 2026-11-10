@@ -49,7 +49,8 @@ const VbeCodec = (() => {
   }
 
   // VBE substitution works on Unicode code units, not encoded UTF-8 bytes.
-  // Escaped ASCII characters count as one source character, not two payload characters.
+  // Script Encoder declares the encoded body length, including both bytes of an escape.
+  // Source character positions advance only for ASCII characters, not non-ASCII code units.
   const markers = /#@~\^(.{6}==)([\s\S]*?)(.{6}==)\^#~@/g;
   const escapeToChar = Object.freeze({ '#': '\r', '&': '\n', '!': '<', '*': '>', '$': '@' });
   const charToEscape = Object.freeze({ '\r': '#', '\n': '&', '<': '!', '>': '*', '@': '$' });
@@ -134,7 +135,7 @@ const VbeCodec = (() => {
       }
       if (code < 128) selectorIndex++;
     }
-    return { payload: payload.join(''), checksum, characters: source.length };
+    return { payload: payload.join(''), checksum, sourceUnits: source.length };
   }
 
   function decodePayload(payload) {
@@ -172,14 +173,14 @@ const VbeCodec = (() => {
     // No fallback to replacement characters is permitted.
     encodeCharacters(prepared, charset);
     const transformed = encodePayload(prepared);
-    const encoded = `#@~^${intToBase64(transformed.characters)}${transformed.payload}${intToBase64(transformed.checksum)}^#~@`;
+    const encoded = `#@~^${intToBase64(transformed.payload.length)}${transformed.payload}${intToBase64(transformed.checksum)}^#~@`;
     const bytes = encodeCharacters(encoded, charset, isUtf16(charset));
     const warnings = [];
     if (charset === 'utf-8' && /[^\x00-\x7f]/.test(prepared)) {
       warnings.push('UTF-8 preserves Unicode text, but Windows Script Host may not execute UTF-8 VBE files.');
     }
     return { text: encoded, bytes, encoding: charset, blockCount: 1, warnings,
-      encodedUnits: transformed.characters, checksum: transformed.checksum };
+      encodedUnits: transformed.payload.length, sourceUnits: transformed.sourceUnits, checksum: transformed.checksum };
   }
 
   function decodeText(source, encoding = 'utf-8') {
@@ -193,8 +194,8 @@ const VbeCodec = (() => {
       const result = decodePayload(payload);
       const length = base64ToInt(declaredLength);
       const checksum = base64ToInt(declaredChecksum);
-      if (length !== null && length !== result.plain.length) {
-        warnings.push(`Block ${blockCount}: source-length metadata mismatch (${length} vs ${result.plain.length}).`);
+      if (length !== null && length !== payload.length) {
+        warnings.push(`Block ${blockCount}: encoded-body length mismatch (${length} vs ${payload.length}).`);
       }
       if (checksum !== null && checksum !== result.checksum) {
         warnings.push(`Block ${blockCount}: checksum mismatch (${checksum} vs ${result.checksum}).`);

@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Client-side VBE encoder and decoder with Unicode-safe character processing.">
+  <meta name="description" content="Client-side VBE encoder and decoder with VBE-format header validation and Unicode-aware character processing.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.2.0">
-  <script src="./codec.js?v=3.2.0" defer></script>
-  <script src="./app.js?v=3.2.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.3.0">
+  <script src="./codec.js?v=3.3.0" defer></script>
+  <script src="./app.js?v=3.3.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -81,8 +81,8 @@
 
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
-      <p>UTF-8 roundtrips do not guarantee Windows Script Host execution. CP949 and other legacy code pages cannot represent every Unicode character; choose UTF-8 for lossless text conversion or UTF-16 LE for Windows Unicode file encoding. Test VBE execution separately.</p>
-      <p>v3.2.0 · All processing takes place in your browser.</p>
+      <p>VBE headers are checked against independent published examples. UTF-8 roundtrips do not guarantee Windows Script Host execution. CP949 and other legacy code pages cannot represent every Unicode character; choose UTF-8 for lossless text conversion or UTF-16 LE for Windows Unicode file encoding. Test VBE execution separately.</p>
+      <p>v3.3.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

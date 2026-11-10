@@ -31,7 +31,7 @@ test('published independent ASCII VBE vector is decoded exactly', () => {
   assert.equal(codec.encodeText(plain).text, sample);
 });
 
-test('escape sequences count as one unescaped character in metadata', () => {
+test('VBE header length counts encoded payload characters, including escapes', () => {
   const source = 'A\r\nB <@> C\nZ';
   const encoded = codec.encodeText(source);
   const data = metadata(encoded.text);
@@ -39,26 +39,26 @@ test('escape sequences count as one unescaped character in metadata', () => {
   assert.ok(data.payload.includes('@!'));
   assert.ok(data.payload.includes('@$'));
   assert.ok(data.payload.includes('@*'));
-  assert.equal(data.length, source.length);
-  assert.ok(data.payload.length > source.length);
+  assert.equal(data.length, data.payload.length);
+  assert.ok(data.length > source.length);
   assert.equal(data.sum, checksum(source));
   assert.equal(codec.decodeText(encoded.text).text, source);
   assert.deepEqual(codec.decodeText(encoded.text).warnings, []);
 });
 
-test('non-ASCII BMP characters contribute to the checksum', () => {
+test('Unicode BMP characters are preserved without consuming ASCII selector positions', () => {
   const source = 'MsgBox "한글 日本語 简体中文 繁體中文 Café Ω Русский"\r\nWScript.Echo "OK"';
   const encoded = codec.encodeText(source);
   assert.equal(metadata(encoded.text).sum, checksum(source));
-  assert.equal(metadata(encoded.text).length, source.length);
+  assert.equal(metadata(encoded.text).length, metadata(encoded.text).payload.length);
   assert.equal(codec.decodeText(encoded.text).text, source);
   assert.deepEqual(codec.decodeText(encoded.text).warnings, []);
 });
 
-test('non-BMP emoji count as UTF-16 surrogate pairs in metadata', () => {
+test('non-BMP emoji are retained in UTF-16 and ASCII selector positions remain stable', () => {
   const source = 'WScript.Echo "😀 🚀 🧑‍💻 🇯🇵"\r\nMsgBox "ASCII after emoji"';
   const encoded = codec.encodeText(source, 'utf-16le');
-  assert.equal(metadata(encoded.text).length, source.length);
+  assert.equal(metadata(encoded.text).length, metadata(encoded.text).payload.length);
   assert.equal(metadata(encoded.text).sum, checksum(source));
   assert.equal(codec.decodeBytes(encoded.bytes).text, source);
   assert.deepEqual(codec.decodeBytes(encoded.bytes).warnings, []);
@@ -114,7 +114,7 @@ test('full ASCII control range, with automatic UTF-16LE BOM output', () => {
   const source = Array.from({length: 128}, (_, i) => String.fromCharCode(i)).join('').repeat(10);
   const encoded = codec.encodeText(source, 'utf-16le');
   assert.equal(codec.decodeBytes(encoded.bytes).text, source);
-  assert.equal(metadata(encoded.text).length, source.length);
+  assert.equal(metadata(encoded.text).length, metadata(encoded.text).payload.length);
 });
 
 test('two encoded blocks, preserve surrounding text including Unicode', () => {
@@ -134,7 +134,7 @@ test('invalid VBE escape is rejected, damaged header is warned', () => {
   assert.ok(recovered.warnings.some(value => value.includes('length')));
 });
 
-test('the legacy v3.1 test fixtures must not be misreported as valid metadata', () => {
+test('legacy generated Unicode fixture mismatch is reported as a warning', () => {
   const oldEncoded = fs.readFileSync(path.join(__dirname, 'fixtures', 'legacy_v31_utf8_bad_header.vbe'));
   const decoded = codec.decodeBytes(new Uint8Array(oldEncoded), 'utf-8');
   assert.equal(decoded.text, unicode);
