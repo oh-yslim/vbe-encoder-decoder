@@ -88,6 +88,25 @@ test('UI Validate VBE reports format validation without claiming execution', asy
   const ui = makeUi();
   await ui.get('sampleEncoded').emit('click');
   await ui.get('validate').emit('click');
-  assert.match(ui.get('message').textContent, /validation passed/i);
-  assert.match(ui.get('details').textContent, /execution: Not tested/);
+  assert.match(ui.get('message').textContent, /format checks passed/i);
+  assert.match(ui.get('details').textContent, /execution: NOT TESTED/i);
+});
+
+test('UI exposes unverified diagnostic output but gates the download', async () => {
+  const ui = makeUi();
+  await ui.get('sampleEncoded').emit('click');
+  const original = ui.get('input').value;
+  ui.get('input').value = original.replace('DgAAAA==', 'AAAAAA==');
+  await ui.get('input').emit('input');
+  await ui.get('decode').emit('click');
+  assert.equal(ui.get('output').value, 'MsgBox "Hello"');
+  assert.match(ui.get('message').textContent, /unverified recovery/i);
+  assert.match(ui.get('details').textContent, /length.*MISMATCH/);
+  assert.equal(ui.get('unverifiedRow').hidden, false);
+  assert.equal(ui.get('download').disabled, true);
+  ui.get('allowUnverified').checked = true;
+  await ui.get('allowUnverified').emit('change');
+  assert.equal(ui.get('download').disabled, false);
+  await ui.get('download').emit('click');
+  assert.match(ui.download().filename, /\.vbs$/);
 });

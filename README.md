@@ -1,10 +1,10 @@
-# VBE Codec v3.4.0
+# VBE Codec v3.5.0
 
 A self-contained Microsoft Script Encoder (`.vbs` / `.vbe`) tool for GitHub Pages. There is **no backend, no external JavaScript dependency, and no execution of submitted VBScript**. The interface, documentation, and source comments are in English. The project is an independently authored browser implementation of the publicly described VBE format, not a fork of the PowerShell repository.
 
 VBE is **obfuscation, not encryption**. Do not execute untrusted scripts.
 
-## What changed in v3.4.0
+## Automatic encoding and download rules (retained from v3.4.0)
 
 - **Download Input** and **Download Result** are separate actions.
 - **No output code-page dropdown.** The text content alone determines download encoding:
@@ -96,3 +96,40 @@ Do not pass untrusted visitor scripts to GitHub Actions or invoke `cscript.exe` 
 - Microsoft Script Encoder / `Scripting.Encoder` COM interface (native reference available in Windows runner)
 - Didier Stevens' public-domain VBE decoder: <https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py>
 - Web Encoding API: <https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder>
+
+## v3.5.0: Diagnostic Decode and integrity isolation
+
+The decoder can now show a **best-effort recovered text preview** even when an encoded
+block fails its declared length, checksum, or recovered-control checks. It does **not**
+claim that unverified output is correct, executable, or safe. This change is intended
+to help compare output from independent decoders without treating a warning as a hard
+failure to view the text.
+
+- `Validate VBE` reports encoded body length, declared and computed checksums,
+  the number of encoded DEL (`U+007F`) units, Unicode units in the encoded body,
+  and unusual control characters in the decoded text. It does not execute code.
+- `Decode` shows the recovered text even if there are integrity warnings. If the
+  output is unverified, **Download Result** stays disabled until the user explicitly
+  acknowledges the risk. Copying the output also displays a warning.
+- One `NUL (U+0000)` immediately after the terminal `^#~@` marker is now accepted
+  during file import and ignored only for decoding, with a warning. A NUL *inside*
+  the encoded body is not silently stripped.
+- Valid encoded `DEL` characters remain permitted. An unexpected control character
+  in *decoded* script text is a warning and no longer prevents the diagnostic preview.
+- Healthy inputs still use the original encoding/decoding and automatic download
+  rules: ASCII only -> ASCII; any non-ASCII -> UTF-16 LE with BOM.
+- Browser-only: the page never executes VBScript and never sends the script to a server.
+
+### Important security and correctness notes
+
+Unverified recovered scripts must not be executed without an independent review.
+The tool never automatically repairs a mismatched header, checksum, or substitution
+phase. A readable-looking script is not proof of valid decoding. A mismatch may be
+due to an altered encoded body, a noncanonical producer, or an algorithmic mismatch.
+Keep actual private or credential-bearing VBE files out of public repositories and
+regression fixtures. Diagnostic details show numeric metadata rather than uploading
+or logging script text.
+
+The test suite includes synthetic, non-sensitive corrupted VBE cases, including
+mismatched metadata, encoded DEL and a trailing NUL. Windows interoperability must
+still be verified independently with the trusted GitHub Actions Windows runner.

@@ -10,6 +10,8 @@
   const details = node('details');
   const inputMeta = node('inputMeta');
   const resultMeta = node('resultMeta');
+  const unverifiedRow = node('unverifiedRow');
+  const allowUnverified = node('allowUnverified');
   const names = { ascii: 'ASCII', 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16 LE with BOM',
     'utf-16be': 'UTF-16 BE', 'utf-32le': 'UTF-32 LE', 'utf-32be': 'UTF-32 BE',
     'euc-kr': 'CP949', shift_jis: 'Shift-JIS / CP932', gbk: 'GBK / CP936',
@@ -43,6 +45,8 @@
     resultMeta.textContent = 'Result download encoding: —';
     node('copy').disabled = true;
     node('download').disabled = true;
+    allowUnverified.checked = false;
+    unverifiedRow.hidden = true;
   }
 
   function refreshInputMeta() {
@@ -81,7 +85,9 @@
       input.value = loaded.text;
       refreshInputMeta();
       status(`File loaded as ${label(loaded.encoding)}. Input is ready for conversion.`);
-      if (loaded.method.startsWith('Heuristic')) {
+      if (loaded.terminalNul) {
+        details.textContent = 'A trailing NUL after the VBE closing marker was detected; only diagnostic decoding will ignore it.';
+      } else if (loaded.method.startsWith('Heuristic')) {
         details.textContent = 'Warning: Legacy code-page detection is probabilistic. Review the displayed text before converting.';
       }
     } catch (error) {
@@ -103,6 +109,23 @@
     status('Choose Encode or Decode.');
   });
 
+  function diagnosticText(report) {
+    const lines = [];
+    for (const block of report.diagnostics || []) {
+      lines.push(`Block ${block.index}: encoded length ${block.declaredLength === null ? 'invalid' : block.declaredLength} / observed ${block.actualLength} (${block.lengthMatch ? 'MATCH' : 'MISMATCH'}).`);
+      lines.push(`Block ${block.index}: checksum ${block.declaredChecksum === null ? 'invalid' : block.declaredChecksum} / calculated ${block.calculatedChecksum} (${block.checksumMatch ? 'MATCH' : 'MISMATCH'}).`);
+      lines.push(`Block ${block.index}: ${block.encodedDelCount} encoded DEL character(s); ${block.encodedUnicodeUnits} non-ASCII encoded character(s). Encoded DEL is permitted.`);
+    }
+    if (report.controls?.count) {
+      lines.push(`Recovered text: ${report.controls.count} unexpected control character(s), including ${report.controls.items.map(item => `${item.unicode} at position ${item.position}`).join(', ')}.`);
+    } else {
+      lines.push('Recovered text: no unusual control characters detected.');
+    }
+    for (const warning of report.warnings || []) lines.push(`WARNING: ${warning}`);
+    lines.push('Windows Script Host execution: NOT TESTED. Do not execute unverified results.');
+    return lines.join('\n');
+  }
+
   function run(mode) {
     clearResult();
     lastMode = mode;
@@ -116,28 +139,37 @@
       result = mode === 'encode'
         ? VbeCodec.encodeText(text, codecEncoding)
         : VbeCodec.decodeText(text, codecEncoding);
-      if (mode === 'decode') VbeCodec.validateSourceControls(result.text);
-      // The decoded text may be all-ASCII even if the encoded input was Unicode,
-      // or vice versa. Always select the result's encoding independently.
-      const bytes = VbeCodec.saveTextAuto(result.text);
-      result.bytes = bytes.bytes;
-      result.encoding = bytes.encoding;
+      const stored = VbeCodec.saveTextAuto(result.text);
+      result.bytes = stored.bytes;
+      result.encoding = stored.encoding;
       output.value = result.text;
-      const ext = mode === 'encode' ? '.vbe' : '.vbs';
+      const unverified = mode === 'decode' && !result.verified;
+      unverifiedRow.hidden = !unverified;
+      allowUnverified.checked = false;
       node('copy').disabled = false;
-      node('download').disabled = false;
-      node('download').textContent = `Download Result ${ext}`;
-      resultMeta.textContent = `Result download encoding: ${label(result.encoding)}.`;
-      status(mode === 'encode'
-        ? `VBE created. Download format: ${label(result.encoding)}.`
-        : `Decoded ${result.blockCount} VBE block(s). Download format: ${label(result.encoding)}.`);
-      details.textContent = result.warnings.length
-        ? `Validation warning: ${result.warnings.join(' / ')}`
-        : 'No metadata warnings. Windows Script Host execution has not been tested.';
+      node('download').disabled = unverified;
+      const ext = mode === 'encode' ? '.vbe' : '.vbs';
+      node('download').textContent = `Download Result ${ext}${unverified ? ' (Unverified)' : ''}`;
+      resultMeta.textContent = `Result download encoding: ${label(result.encoding)}. ${unverified ? 'Recovery is UNVERIFIED.' : ''}`;
+      if (mode === 'encode') {
+        status(`VBE created. Download format: ${label(result.encoding)}.`);
+        details.textContent = result.warnings.length ? result.warnings.join('\n') : 'Windows Script Host execution has not been tested.';
+      } else if (unverified) {
+        status(`Unverified recovery: ${result.blockCount} VBE block(s), ${result.warnings.length} warning(s). Recovered text is shown for inspection only.`, true);
+        details.textContent = diagnosticText(result);
+      } else {
+        status(`Decoded ${result.blockCount} VBE block(s). Format checks passed; Windows execution is untested.`);
+        details.textContent = diagnosticText(result);
+      }
     } catch (error) {
+      result = null;
       status(`Conversion failed: ${error.message}`, true);
     }
   }
+
+  allowUnverified.addEventListener('change', () => {
+    node('download').disabled = !(result && lastMode === 'decode' && !result.verified && allowUnverified.checked);
+  });
 
   node('encode').addEventListener('click', () => run('encode'));
   node('decode').addEventListener('click', () => run('decode'));
@@ -145,11 +177,9 @@
     try {
       const validation = VbeCodec.validateVbe(sourceText());
       status(validation.valid
-        ? `VBE validation passed for ${validation.blocks} block(s). This is not an execution test.`
-        : `VBE validation found ${validation.warnings.length} warning(s).`, !validation.valid);
-      details.textContent = validation.warnings.length
-        ? validation.warnings.join(' / ')
-        : `Recovered source download encoding: ${label(validation.recoveredEncoding)}. Windows execution: Not tested.`;
+        ? `VBE format checks passed for ${validation.blocks} block(s). This is not an execution test.`
+        : `VBE is unverified: ${validation.warnings.length} warning(s).`, !validation.valid);
+      details.textContent = diagnosticText(validation);
     } catch (error) {
       status(`VBE validation failed: ${error.message}`, true);
       details.textContent = '';
@@ -160,7 +190,7 @@
     if (!result) return;
     try {
       await navigator.clipboard.writeText(result.text);
-      status('Result copied.');
+      status(result.verified === false ? 'Unverified recovery copied. Do not execute without independent verification.' : 'Result copied.');
     } catch {
       output.focus();
       output.select();
@@ -192,10 +222,10 @@
   });
 
   node('download').addEventListener('click', () => {
-    if (!result) return;
+    if (!result || node('download').disabled) return;
     const extension = lastMode === 'encode' ? '.vbe' : '.vbs';
     download(result.bytes, `${fileName}${extension}`);
-    status(`Result saved as ${label(result.encoding)}.`);
+    status(result.verified === false ? `UNVERIFIED output saved as ${label(result.encoding)}. Do not execute.` : `Result saved as ${label(result.encoding)}.`);
   });
 
   function sample(text, name, notice) {

@@ -55,3 +55,10 @@ footer p { margin: 6px 0 0; }
   #message.error { color: #ffa5a0; }
 }
 .encoding-info { color: var(--accent); font-size: 12px; font-weight: 650; margin: 9px 0 3px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* Keep diagnostic records legible without interpreting recovered script as HTML. */
+#details { white-space: pre-line; overflow-wrap: anywhere; }
+.warning-ack { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0; padding: 10px 12px;
+  border: 1px solid #cf9a4b; border-radius: 8px; font-size: 0.9rem; }
+.warning-ack[hidden] { display: none; }
+.warning-ack input { margin-top: 3px; flex: 0 0 auto; }

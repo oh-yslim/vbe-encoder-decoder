@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Privacy-first, browser-only VBE encoder and decoder with automatic Unicode-safe downloads.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.4.0">
-  <script src="./codec.js?v=3.4.0" defer></script>
-  <script src="./app.js?v=3.4.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.5.0">
+  <script src="./codec.js?v=3.5.0" defer></script>
+  <script src="./app.js?v=3.5.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -50,6 +50,10 @@
       <div class="section-heading"><h2 id="resultTitle">2. Result</h2><span class="muted">Text is never executed</span></div>
       <textarea id="output" aria-label="Conversion result" readonly spellcheck="false" translate="no" placeholder="The converted result appears here."></textarea>
       <p id="resultMeta" class="encoding-info">Result download encoding: —</p>
+      <label class="warning-ack" id="unverifiedRow" hidden>
+        <input id="allowUnverified" type="checkbox">
+        Enable download of unverified recovered text (may be corrupted; never execute without review).
+      </label>
       <div class="actions">
         <button type="button" id="copy" disabled>Copy Result</button>
         <button type="button" id="download" disabled>Download Result</button>
@@ -61,8 +65,8 @@
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
       <p>Downloads: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. Invalid source controls and unpaired surrogates are rejected.</p>
-      <p>Validation checks format and metadata only. It cannot execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
-      <p>v3.4.0 · All processing takes place in your browser.</p>
+      <p>Diagnostic decoding can display unverified text even if length, checksum, or recovered-control checks fail. Unverified downloads require explicit acknowledgement. Validation does not execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
+      <p>v3.5.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

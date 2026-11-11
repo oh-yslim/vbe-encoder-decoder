@@ -184,33 +184,74 @@ const VbeCodec = (() => {
       encodedUnits: transformed.payload.length, sourceUnits: transformed.sourceUnits, checksum: transformed.checksum };
   }
 
+  // Diagnostic decoding is intentionally separate from integrity validation.
+  // Never claim that a decoded script is safe or executable just because text was recovered.
+  function sourceControlIssues(text, maximum = 12) {
+    const issues = [];
+    let count = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if ((code < 32 && code !== 9 && code !== 10 && code !== 13) ||
+          code === 127 || (code >= 128 && code <= 159)) {
+        count++;
+        if (issues.length < maximum) {
+          issues.push({ position: i + 1, unicode: `U+${code.toString(16).toUpperCase().padStart(4, '0')}` });
+        }
+      }
+    }
+    return { count, items: issues };
+  }
+
   function decodeText(source, encoding = 'utf-8') {
     if (typeof source !== 'string') throw new Error('Text input is required.');
     const charset = normalizeEncoding(encoding);
     const warnings = [];
+    const diagnostics = [];
     let blockCount = 0;
+    // Some native COM encoder outputs have a single NUL after the closing marker.
+    // Only this exact placement is treated as a terminator, not NULs inside a payload.
+    const hasTerminalNul = source.endsWith('^#~@\0');
+    const input = hasTerminalNul ? source.slice(0, -1) : source;
+    if (hasTerminalNul) {
+      warnings.push('Trailing NUL terminator after the VBE closing marker was ignored for decoding.');
+    }
     markers.lastIndex = 0;
-    const decoded = source.replace(markers, (match, declaredLength, payload, declaredChecksum) => {
+    const decoded = input.replace(markers, (match, declaredLength, payload, declaredChecksum) => {
       blockCount++;
       const result = decodePayload(payload);
       const length = base64ToInt(declaredLength);
       const checksum = base64ToInt(declaredChecksum);
-      if (length !== null && length !== payload.length) {
-        warnings.push(`Block ${blockCount}: encoded-body length mismatch (${length} vs ${payload.length}).`);
+      const block = {
+        index: blockCount,
+        declaredLength: length,
+        actualLength: payload.length,
+        declaredChecksum: checksum,
+        calculatedChecksum: result.checksum,
+        encodedDelCount: [...payload].filter(ch => ch.charCodeAt(0) === 127).length,
+        encodedUnicodeUnits: [...payload].filter(ch => ch.charCodeAt(0) > 127).length,
+        lengthMatch: length !== null && length === payload.length,
+        checksumMatch: checksum !== null && checksum === result.checksum
+      };
+      diagnostics.push(block);
+      if (!block.lengthMatch) {
+        warnings.push(`Block ${blockCount}: encoded-body length mismatch (${length === null ? 'invalid' : length} vs ${payload.length}).`);
       }
-      if (checksum !== null && checksum !== result.checksum) {
-        warnings.push(`Block ${blockCount}: checksum mismatch (${checksum} vs ${result.checksum}).`);
-      }
-      if (length === null || checksum === null) {
-        warnings.push(`Block ${blockCount}: noncanonical VBE metadata.`);
+      if (!block.checksumMatch) {
+        warnings.push(`Block ${blockCount}: checksum mismatch (${checksum === null ? 'invalid' : checksum} vs ${result.checksum}).`);
       }
       return result.plain;
     });
     if (!blockCount) throw new Error('No VBE block (#@~^...^#~@) found.');
     validateScalarText(decoded);
+    const controls = sourceControlIssues(decoded);
+    if (controls.count > 0) {
+      warnings.push(`Decoded text contains ${controls.count} unusual control character(s). Review the recovery before use.`);
+    }
+    const verified = warnings.length === 0;
     // Encoding selection affects input/output bytes, never the character substitution.
     const bytes = encodeCharacters(decoded, charset, isUtf16(charset));
-    return { text: decoded, bytes, encoding: charset, blockCount, warnings };
+    return { text: decoded, bytes, encoding: charset, blockCount, warnings,
+      diagnostics, controls, terminalNulIgnored: hasTerminalNul, verified };
   }
 
   function encodeBytes(bytes, encoding = 'auto') {
@@ -435,7 +476,9 @@ const VbeCodec = (() => {
       encoding = 'utf-16le'; text = new TextDecoder('utf-16le', { fatal: true }).decode(b); method = 'UTF-16 BOM';
     } else if (b.length >= 2 && starts(0xfe, 0xff)) {
       encoding = 'utf-16be'; text = new TextDecoder('utf-16be', { fatal: true }).decode(b); method = 'UTF-16 BOM';
-    } else if (b.every(value => value < 128 && value !== 0)) {
+    } else if (b.every(value => value < 128 && value !== 0) ||
+        (b[b.length - 1] === 0 && b.subarray(0, -1).every(value => value > 0 && value < 128) &&
+        new TextDecoder('utf-8', { fatal: true }).decode(b.subarray(0, -1)).endsWith('^#~@'))) {
       encoding = 'ascii';
       // TextDecoder avoids argument count limits for long ASCII files.
       text = new TextDecoder('utf-8', { fatal: true }).decode(b); method = 'ASCII bytes';
@@ -494,27 +537,28 @@ const VbeCodec = (() => {
       }
     }
     validateScalarText(text);
-    if (!plausibleScriptText(text)) {
+    // Accept only a final NUL after a complete VBE closing marker. Keep the
+    // original text for export; the diagnostic decoder ignores the terminator.
+    const terminalNul = text.endsWith('^#~@\0');
+    const textToCheck = terminalNul ? text.slice(0, -1) : text;
+    if (!plausibleScriptText(textToCheck)) {
       throw new Error('The file contains invalid text control characters or undecodable data.');
     }
-    return { text, encoding, method, outputEncoding: chooseDownloadEncoding(text) };
+    return { text, encoding, method, outputEncoding: chooseDownloadEncoding(text), terminalNul };
   }
 
   function validateVbe(source) {
     const result = decodeText(source, chooseDownloadEncoding(source) === 'ascii' ? 'utf-8' : 'utf-16le');
-    // Decode warnings remain warnings, never proof of a valid script or WSH execution.
-    let sourceControlWarning = null;
-    try { validateSourceControls(result.text); } catch (error) { sourceControlWarning = error.message; }
-    const warnings = [...result.warnings];
-    if (sourceControlWarning) warnings.push(sourceControlWarning);
-    return { blocks: result.blockCount, warnings, valid: !warnings.length,
-      recoveredEncoding: chooseDownloadEncoding(result.text) };
+    return { blocks: result.blockCount, warnings: result.warnings,
+      valid: result.verified, recoveredEncoding: chooseDownloadEncoding(result.text),
+      diagnostics: result.diagnostics, controls: result.controls,
+      terminalNulIgnored: result.terminalNulIgnored };
   }
 
   return Object.freeze({ encodeText, decodeText, encodeBytes, decodeBytes,
     encodeCharacters, decodeCharacters, detectEncoding, validateScalarText,
     validateSourceControls, chooseDownloadEncoding, saveTextAuto,
-    readFileAuto, validateVbe });
+    readFileAuto, validateVbe, sourceControlIssues });
 
 })();
 
