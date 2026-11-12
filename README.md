@@ -1,93 +1,58 @@
-# VBE Codec v3.7.0
+# VBE Codec v3.8.0
 
-A standalone, browser-only Microsoft Script Encoder (VBE) encoder and decoder for GitHub Pages. All interface text, documentation and code comments are English. No backend, package manager, external runtime dependency or execution of submitted scripts is required.
+A static, browser-only VBE encoder/decoder for GitHub Pages. Interface text, comments and documentation are English. Files are processed locally; user scripts are **never executed or uploaded** to a backend.
 
-> VBE is obfuscation, not encryption. A valid checksum is not evidence that the script is benign. The website never runs a VBS/VBE file.
+VBE is obfuscation, not encryption. Do not execute unknown VBScript/VBE files.
 
-## Changes in v3.7.0
+## Native reference parity added in v3.8.0
 
-### Recover encoded storage bytes **before** interpreting Unicode
+The release is tested against previously observed, benign `screnc.exe` reference vectors. It **does not** claim to reproduce every version of `screnc.exe` on every locale.
 
-Older releases decoded a UTF-8 VBE as its displayed Unicode text, then tried decoding the *encoded text* as CP949/GBK. This sometimes produced valid-looking metadata but showed mojibake in comments and other Unicode characters.
+| Reference vector | Input | Native output | Test result |
+|---|---|---|---|
+| T4-1 | 267-byte UTF-8 VBS without BOM | 262-byte raw 8-bit VBE | **Byte-for-byte identical**, including terminal NUL |
+| T4-2 | 332-byte UTF-16 LE BOM VBS | 394-byte UTF-16 LE BOM VBE | **Byte-for-byte identical**, including terminal NUL |
+| Independent ASCII sample | ASCII VBS | Known VBE fixture | Substitution and decoding checks retained |
 
-`decodeStorageBytes()` is a separate, byte-oriented recovery route:
+The tests store fingerprints of the externally produced outputs rather than shipping the original user-uploaded VBE files. The T4 test source is a benign reconstructed multilingual stress sample, not a private script.
 
-1. Detect encoded VBE markers in the original ASCII-compatible byte stream.
-2. Try legacy DBCS byte-pair boundaries independently for CP949, GBK, Shift-JIS and Big5, plus the unpaired byte stream.
-3. Decode ASCII substitution bytes using the VBE selector table. Preserve non-ASCII bytes and DBCS pairs unchanged.
-4. Validate each candidate against the encoded-body length and checksum fields.
-5. Decode the **recovered source bytes** with strict text decoding, preferring the imported storage encoding; do not convert the recovered data into CP949 just because CP949 was used to determine the VBE byte boundaries.
-6. If several candidates yield identical recovered bytes, merge their labels; if the candidates yield different texts, do not silently declare one interpretation to be correct.
+### Why the old UTF-8 encoder differed
 
-**Scope:** This byte route can correct the earlier `容붵...`-style display caused by interpreting UTF-8 bytes as CP949 *text*. It cannot reconstruct Unicode that was already altered or replaced by the source encoder or by an earlier conversion. Length/checksum matches prove only the respective metadata. For Unicode-heavy VBE files, independently compare the recovered content with the original script.
+The previous encoder converted a BOM-free UTF-8 source into JavaScript Unicode text first, then applied Unicode-code-unit substitution. In the tested `screnc.exe` path, the original UTF-8 bytes were instead interpreted as CP949-style **double-byte units**. An invalid byte pair consumed both bytes and became a single `?`, including a pair that consumed an LF after an invalid lead byte. This changed the selector position, encoded-body length, checksum, and emitted storage bytes.
 
-### Preserve the original **file encoding on Result export**, until the Input changes
+Generic browser `TextDecoder('euc-kr')` is **not equivalent** to the Windows CP949 mapping for all pairs. For example, CP949 treats `94 E3` as the valid character `붵`, while the generic decoder used by the old implementation did not. This release includes a compact static CP949 mapping (`cp949-map.js`) for the 17,048 valid double-byte combinations. Runtime use requires no Python, Node, npm, or external library.
 
-For an uploaded file that has not been edited:
+The UTF-8 file path now reproduces the T4-1 reference by scanning **original bytes**, treating valid CP949 pairs as untouched units, and substituting invalid paired input into a single `?` before VBE ASCII transformation. Some emitted native-style VBE files are **not valid UTF-8**, even if the source VBS was saved as UTF-8. The result is downloaded as exact raw bytes with a trailing NUL. For such outputs, the browser displays a reversible `\xHH` escaped-byte **preview**, not a pasteable VBE text; the Copy Result button is disabled.
 
-- **Download Input:** exact original uploaded bytes, including BOM or terminal NUL.
-- **Download Result:** encode the new VBS/VBE text with the detected file encoding, preserving the presence or absence of a BOM. ASCII, UTF-8 (BOM or no BOM), UTF-16 LE/BE, UTF-32 LE/BE, and representable legacy encodings are handled. Unrepresentable characters cause an explicit error rather than replacement with `?`.
-- The original text (and original CRLF) remains available to the conversion engine even when the browser's textarea visually normalizes newlines.
+### Encoding policy
 
-If the user **pastes** text or **edits** an uploaded Input, the old automatic output policy applies:
+- **Unedited uploaded UTF-8 without BOM / ASCII / CP949 file:** native-style 8-bit byte encoder, with output bytes preserved exactly as generated by the conversion engine.
+- **Unedited uploaded UTF-16 LE BOM file:** Unicode-code-unit encoder; native-style terminal UTF-16 NUL appended. T4-2 is an independent byte-parity test.
+- **Other unedited Unicode uploads:** current verified Unicode text path and original BOM/encoding policy retained. Native byte parity for these formats is **not established**.
+- **Pasted text or any edited input:** ASCII output if every source character is U+0000–U+007F; otherwise UTF-16 LE with BOM, including Unicode in comments. No manual code-page selector.
+- **Download Input:** unedited uploaded original bytes are retained byte-for-byte.
+- **Decode:** existing byte-oriented recovery is maintained; `cp949-map.js` improves the validity checks for Windows CP949 pairs. Original Unicode content cannot be reconstructed if native `screnc.exe` already changed it irreversibly.
 
-- All characters in `U+0000..U+007F`: ASCII without BOM.
-- Any Unicode character outside that range, **including in comments**: UTF-16 LE with BOM (`FF FE`).
+### Native raw-byte preview
 
-There is no manual output-encoding selector.
+When a native VBE contains bytes that cannot be faithfully represented as a UTF-8 string, the input/output preview shows the bytes using `\xHH` escapes. This representation must **not** be pasted into another encoder as though it were the original VBE. Use **Download Result** / **Download Input** for exact bytes. An uploaded raw VBE preview is read-only; Decode uses the original file bytes, not the rendered preview.
 
-### Important native Encoder parity limitation
+If several legacy codepages pass the VBE header and checksum checks but produce different Unicode text, the result is a **heuristic/unverified preview**, not a proven reconstruction. Acknowledgement is required before downloading unverified output.
 
-`encodeText()` is the existing Unicode-code-unit encoder. Its outputs match the included independent ASCII examples and earlier selected Windows tests, **but native `screnc.exe` does not necessarily produce the same output for complex UTF-8 Unicode**. Byte-oriented DBCS handling can change logical lengths and selector positions, and some legacy conversions lose characters. The page warns about this on Unicode Encode. v3.7.0 does **not** claim that it reproduces the native Encoder for all Unicode inputs.
+## Test and deployment
 
-The string "뭵" uses UTF-8 bytes `EB AD B5`, while its CP949 encoding uses `92 84`. Interpreting UTF-8 bytes with a DBCS parser can alter character boundaries; such damage must not be mistaken for Unicode-safe obfuscation.
-
-The site does not attempt to reconstruct missing Unicode characters by guessing. When testing Windows execution compatibility, use `screnc.exe`/the native COM encoder and `cscript.exe` against **trusted** test samples in a controlled environment; do not send arbitrary visitor-provided scripts to GitHub Actions.
-
-## Tests
-
-Run the JavaScript tests with Node.js 22+:
+From the project root, with Node.js 22+ (for development only):
 
 ```sh
 node --test tests/*.js
 ```
 
-A dedicated Windows runner check remains available at:
+The `tests/test-native-golden.js` tests compare the exact bytes against independently observed SHA-256 reference hashes from the two native `screnc.exe` results. Browser UI interaction and byte downloads are also tested. The Windows job tests trusted reference cases using the Windows scripting engine and must be verified on GitHub Actions; local JavaScript/browser success is **not** a general Windows execution guarantee.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test-wsh-compat.ps1
-```
+To deploy, extract the ZIP to the root of a public repository and set **Settings → Pages → Deploy from a branch → main → /(root)**. Keep `cp949-map.js`, `codec.js`, `app.js`, `index.html`, and `style.css` at the root. `cp949-map.js` must load **before** `codec.js`.
 
-The tests include synthetic ASCII, multilingual Unicode/emoji, CRLF, UTF-8/UTF-16/UTF-32 file formats, independent published ASCII VBE vectors, terminal-NUL handling, byte-verified recovery without mojibake and original-output-encoding retention until editing. **Private user-uploaded scripts, recovered credentials and tokens are not included** in the public distribution.
+The existing `.github/workflows/test.yml` checks JavaScript regressions and Windows Script Host compatibility. In `Deploy from a branch` mode, failing tests do not automatically prevent Pages from publishing.
 
-The JavaScript test suite passed locally for this build. Real WSH execution and byte-for-byte comparison with native `screnc.exe` for the newly reported extreme Unicode examples are still unverified. Automated browser DOM tests are included; a fresh, direct Chromium navigation could not be completed in the build sandbox because local navigation was blocked.
+## Scope
 
-## Deployment to GitHub Pages
-
-1. Create or open a public GitHub repository (for example, `vbe-codec`).
-2. Extract the ZIP and upload the extracted files into the repository root, replacing older versions. For additions/deletions in one commit, use the `github.dev` editor (`.` shortcut).
-3. Configure **Settings → Pages → Deploy from a branch → main → /(root)**.
-4. Commit, confirm the GitHub Actions results, and visit the Pages site.
-
-The workflow file `.github/workflows/test.yml` runs JavaScript and Windows native-reference tests. With `Deploy from a branch`, a test failure does not by itself prevent Pages from publishing, so check Actions before declaring a release stable.
-
-## Source structure
-
-```text
-index.html
-style.css
-codec.js
-app.js
-.nojekyll
-README.md
-.github/workflows/test.yml
-tests/*.js
-tests/windows/test-wsh-compat.ps1
-test-samples/
-```
-
-## References
-
-- Microsoft: <https://learn.microsoft.com/en-us/windows/win32/intl/double-byte-character-sets>
-- Didier Stevens' public-domain VBE decoder: <https://github.com/DidierStevens/DidierStevensSuite/blob/master/decode-vbe.py>
-- Additional byte-oriented VBE comparison: <https://github.com/nao-sec/screnc.php> (MIT-licensed independent implementation; not copied into this project)
+This is an independent, compatible implementation for the observed input/output vectors. It is not a reverse-engineered copy of Microsoft's executable. The CP949 byte-processing model reproduces the observed T4-1 output exactly, but other Windows locales, legacy code pages, malformed input, and unobserved `screnc.exe` behaviors may differ. No untrusted user-provided scripts are run by the web site or CI.

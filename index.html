@@ -6,9 +6,10 @@
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Privacy-first, browser-only VBE encoder and decoder with automatic Unicode-safe downloads.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.7.0">
-  <script src="./codec.js?v=3.7.0" defer></script>
-  <script src="./app.js?v=3.7.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.8.0">
+  <script src="./cp949-map.js?v=3.8.0" defer></script>
+  <script src="./codec.js?v=3.8.0" defer></script>
+  <script src="./app.js?v=3.8.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -16,7 +17,7 @@
       <div class="eyebrow">BROWSER-ONLY · NO BACKEND · NO SCRIPT EXECUTION</div>
       <h1>VBE Codec</h1>
       <p>Encode and decode Microsoft Script Encoder <code>.vbs</code> and <code>.vbe</code> files.</p>
-      <div class="privacy">✓ Files stay in your browser &nbsp; ✓ Unedited uploads retain original storage encoding &nbsp; ✓ Windows compatibility tested separately</div>
+      <div class="privacy">✓ Files stay in your browser &nbsp; ✓ Native-compatible byte downloads for tested files &nbsp; ✓ Windows compatibility tested separately</div>
     </header>
 
     <section class="panel" aria-labelledby="sourceTitle">
@@ -64,9 +65,9 @@
 
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
-      <p>Pasted or edited text exports: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. For unedited uploaded files, Result preserves the detected original file encoding and BOM; Download Input preserves the exact source bytes. Invalid source controls and unpaired surrogates are rejected.</p>
+      <p>Pasted or edited text exports: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. Unedited uploaded sources follow the original file format and native-compatible byte rules. Some native 8-bit VBE files are not valid UTF-8; download the exact bytes rather than copying the escaped preview. Download Input preserves original upload bytes.</p>
       <p>Diagnostic decoding can display unverified text even if length, checksum, or recovered-control checks fail. An automatic legacy-byte interpretation is accepted only when length, checksum, and recovered control checks pass unambiguously. Unverified downloads require explicit acknowledgement. Validation does not execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
-      <p>v3.7.0 · All processing takes place in your browser.</p>
+      <p>v3.8.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

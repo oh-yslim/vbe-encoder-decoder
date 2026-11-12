@@ -189,3 +189,47 @@ test('Byte-oriented recovery does not reinterpret recovered Unicode as CP949 cha
   assert.deepEqual(recovered.warnings, []);
   assert.ok(recovered.diagnostics.every(x => x.lengthMatch && x.checksumMatch));
 });
+
+test('UI unedited UTF-8 VBS upload downloads the exact native-compatible 8-bit VBE bytes', async () => {
+  const crypto = require('node:crypto');
+  const ui = makeUi();
+  const source = [
+    "'" + '뭵'.repeat(22), "'뭵", "'黔ㆃ§eªN°Λ ?Ζ?Ξ?Μ³λ ?π??筍菽???",
+    'Option Explicit', "' 한글 / 日本語 / 中文 / Café / Emoji 😀 🚀",
+    'WScript.Echo "Hello 한글 / 日本語 / 中文 / Café / Emoji 😀 🚀"', ''
+  ].join('\n');
+  const bytes = new TextEncoder().encode(source);
+  ui.get('upload').files = [{ name: 'T4-1.vbs', size: bytes.length,
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }];
+  await ui.get('upload').emit('change');
+  assert.match(ui.get('message').textContent, /File loaded/);
+  await ui.get('encode').emit('click');
+  assert.match(ui.get('message').textContent, /Native-style 8-bit VBE generated/);
+  assert.equal(ui.get('copy').disabled, true);
+  assert.match(ui.get('output').value, /\\xEB/);
+  await ui.get('download').emit('click');
+  const saved = Buffer.from(await ui.blobs.get(ui.download().url).arrayBuffer());
+  assert.equal(saved.length, 262);
+  assert.equal(crypto.createHash('sha256').update(saved).digest('hex'),
+    '7998367c6d099bbe0e2bed38e672d33d31490a4427914a305c915b7c9d94e35c');
+});
+
+test('UI can re-import native 8-bit VBE and show a cautious decoded preview', async () => {
+  const ui = makeUi();
+  const source = [
+    "'" + '뭵'.repeat(22), "'뭵", "'黔ㆃ§eªN°Λ ?Ζ?Ξ?Μ³λ ?π??筍菽???",
+    'Option Explicit', "' 한글 / 日本語 / 中文 / Café / Emoji 😀 🚀",
+    'WScript.Echo "Hello 한글 / 日本語 / 中文 / Café / Emoji 😀 🚀"', ''
+  ].join('\n');
+  const bytes = VbeCodec.encodeNativeFile(new TextEncoder().encode(source),
+    { encoding: 'utf-8', text: source }).bytes;
+  ui.get('upload').files = [{ name: 'T4-1.vbe', size: bytes.length,
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }];
+  await ui.get('upload').emit('change');
+  assert.match(ui.get('message').textContent, /Native 8-bit VBE loaded/);
+  await ui.get('decode').emit('click');
+  assert.match(ui.get('output').value, /Option Explicit/);
+  assert.match(ui.get('details').textContent, /189 \/ observed 189 \(MATCH\)/);
+  assert.match(ui.get('details').textContent, /9013 \/ calculated 9013 \(MATCH\)/);
+  assert.match(ui.get('details').textContent, /UNVERIFIED|unverified/i);
+});

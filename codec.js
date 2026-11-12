@@ -6,6 +6,8 @@
  */
 const VbeCodec = (() => {
   'use strict';
+  const cp949 = typeof VbeCP949 !== 'undefined' ? VbeCP949 :
+    (typeof require !== 'undefined' ? require('./cp949-map.js') : null);
 
   // Each triplet is a decoded byte for one encoded byte in ASCII 0x20..0x7F.
   const rows = [
@@ -79,6 +81,7 @@ const VbeCodec = (() => {
   const dbcsPairValidCache = new Map();
 
   function validDbcsPair(lead, trail, encoding) {
+    if (encoding === 'euc-kr' && cp949) return cp949.lookup(lead, trail) !== 0;
     if (!isDbcsLead(lead, encoding) || !isDbcsTrail(trail, encoding)) return false;
     const key = `${encoding}:${lead}:${trail}`;
     if (dbcsPairValidCache.has(key)) return dbcsPairValidCache.get(key);
@@ -178,6 +181,87 @@ const VbeCodec = (() => {
       if (plainCode < 128) selectorIndex++;
     }
     return { plain, checksum };
+  }
+
+  // Native-compatible CP949-style byte scanning for BOM-free UTF-8 and legacy bytes.
+  // It is distinct from the Unicode-text encoder. Valid CP949 pairs pass through
+  // unchanged as one logical VBE unit. An invalid lead pair consumes both bytes
+  // and substitutes '?' before VBE ASCII encoding, including when the second
+  // byte is a newline. Native T4-1 parity is independently checked in tests.
+  function encodeNative8Bit(input) {
+    if (!(input instanceof Uint8Array)) throw new Error('Byte input is required.');
+    if (!cp949) throw new Error('CP949 byte mapping is unavailable.');
+    const payload = [];
+    let selectorIndex = 0;
+    let checksum = 0;
+    let bodyLength = 0;
+    for (let i = 0; i < input.length; i++) {
+      let byte = input[i];
+      if (byte >= 0x81 && byte <= 0xfe && i + 1 < input.length) {
+        const next = input[++i];
+        if (cp949.lookup(byte, next)) {
+          payload.push(byte, next);
+          bodyLength++;
+          continue;
+        }
+        // Invalid native-style two-byte sequence: consume both input bytes.
+        byte = 0x3f;
+      } else if (byte >= 0x80) {
+        payload.push(byte);
+        bodyLength++;
+        continue;
+      }
+      checksum = (checksum + byte) >>> 0;
+      if (Object.prototype.hasOwnProperty.call(byteToEscape, byte)) {
+        payload.push(0x40, byteToEscape[byte]);
+        bodyLength += 2;
+      } else {
+        payload.push(transformable(byte) ? encodeMap[selectors[selectorIndex % 64]][byte] : byte);
+        bodyLength++;
+      }
+      selectorIndex++;
+    }
+    const header = `#@~^${intToBase64(bodyLength)}`;
+    const footer = `${intToBase64(checksum)}^#~@`;
+    const ascii = value => Array.from(value, char => char.charCodeAt(0));
+    const bytes = Uint8Array.from([...ascii(header), ...payload, ...ascii(footer), 0]);
+    const escaped = bytes.some(byte => byte > 127);
+    const text = escaped ? byteEscapePreview(bytes) :
+      Array.from(bytes.subarray(0, -1), byte => String.fromCharCode(byte)).join('');
+    return { bytes, blockCount: 1, checksum, encodedUnits: bodyLength,
+      storageMode: 'native-8bit', encoding: escaped ? 'raw-8bit' : 'ascii',
+      warnings: escaped ? ['Native-compatible 8-bit output may not be valid UTF-8. Download the original bytes; an escaped preview cannot substitute for this file.'] : [],
+      text, previewEscaped: escaped, verified: true };
+  }
+
+  function byteEscapePreview(bytes) {
+    let output = '';
+    for (const b of bytes) {
+      output += b === 10 ? '\n' : b === 13 ? '\r' : b === 9 ? '\t' :
+        (b >= 32 && b <= 126 ? String.fromCharCode(b) :
+        `\\x${b.toString(16).toUpperCase().padStart(2, '0')}`);
+    }
+    return output;
+  }
+
+  // The file-upload path retains native terminal-NUL conventions independently
+  // from the plain Unicode API used for pasted/edited inputs.
+  function encodeNativeFile(bytes, info) {
+    if (!(bytes instanceof Uint8Array) || !info) throw new Error('Original upload is required.');
+    const mode = info.encoding;
+    if (mode === 'utf-8' && bytes[0] !== 0xef) return encodeNative8Bit(bytes);
+    if (mode === 'euc-kr' || mode === 'ascii') return encodeNative8Bit(bytes);
+    const result = encodeText(info.text, mode === 'ascii' ? 'utf-8' : mode);
+    const inputBom = (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) ||
+      (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff) ||
+      (bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 0xfe && bytes[3] === 0xff);
+    const output = encodeCharacters(result.text, mode === 'ascii' ? 'ascii' : mode, inputBom);
+    const terminator = isUtf16(mode) ? [0, 0] :
+      (mode === 'utf-32le' || mode === 'utf-32be' ? [0, 0, 0, 0] : [0]);
+    result.bytes = Uint8Array.from([...output, ...terminator]);
+    result.terminalNul = true;
+    result.storageMode = 'unicode-file';
+    return result;
   }
 
   function encodeText(source, encoding = 'utf-8') {
@@ -364,7 +448,7 @@ const VbeCodec = (() => {
       const recoveredBytes = Uint8Array.from(output);
       let text = null;
       let recoveredEncoding = storageEncoding;
-      const decoders = [...new Set([storageEncoding, 'utf-8'])];
+      const decoders = [...new Set([storageEncoding, 'utf-8', codePage].filter(Boolean))];
       for (const decoder of decoders) {
         try {
           text = decodeCharacters(recoveredBytes, decoder === 'ascii' ? 'utf-8' : decoder);
@@ -391,25 +475,28 @@ const VbeCodec = (() => {
       if (same) same.descriptions.push(candidate.description);
       else distinct.push({ ...candidate, descriptions: [candidate.description] });
     }
-    if (distinct.length !== 1) return { ambiguous: true,
+    if (distinct.length !== 1 && storageEncoding !== 'raw-8bit') return { ambiguous: true,
       candidates: distinct.map(item => item.descriptions.join(' / ')) };
-    const chosen = distinct[0];
+    const heuristic = distinct.length !== 1;
+    const chosen = heuristic ?
+      (distinct.find(item => item.codePage === 'euc-kr') || distinct[0]) : distinct[0];
     return {
       text: chosen.text,
       bytes: chosen.recoveredBytes,
       encoding: chosen.recoveredEncoding,
       blockCount: chosen.diagnostics.length,
-      warnings: [],
+      warnings: heuristic ? ['Multiple legacy code pages can recover different text. The CP949 preview is not independently verified.'] : [],
       notices: ['Byte-oriented VBE metadata matched. This does not prove that screnc.exe preserved the original Unicode text.'],
       diagnostics: chosen.diagnostics,
       controls: chosen.controls,
-      verified: true,
+      verified: !heuristic,
       interpretation: {
-        method: 'storage-byte-recovery',
+        method: heuristic ? 'heuristic-native-byte-recovery' : 'storage-byte-recovery',
         label: chosen.descriptions.join(' / '),
         candidates: chosen.descriptions,
-        candidateCount: chosen.descriptions.length,
-        note: 'Encoded bytes were processed before decoding recovered script text.'
+        candidateCount: distinct.length,
+        candidates: distinct.map(item => item.descriptions.join(' / ')),
+        note: heuristic ? 'The CP949 interpretation is an unverified preview: multiple code pages pass metadata checks.' : 'Encoded bytes were processed before decoding recovered script text.'
       }
     };
   }
@@ -584,6 +671,7 @@ const VbeCodec = (() => {
   }
 
   function decodeCharacters(bytes, charset) {
+    if (charset === 'euc-kr' && cp949) return cp949.decode(bytes);
     if (charset === 'windows-1252') return Array.from(bytes, byte => {
       if (byte >= 0x80 && byte <= 0x9f) return cp1252Special[byte - 0x80] || String.fromCharCode(byte);
       return String.fromCharCode(byte);
@@ -665,6 +753,7 @@ const VbeCodec = (() => {
       }
       return Uint8Array.from(bytes);
     }
+    if (encoding === 'euc-kr' && cp949) return cp949.encode(text);
     const reverse = buildLegacyMap(encoding);
     const output = [];
     for (const character of text) {
@@ -837,6 +926,18 @@ const VbeCodec = (() => {
         } catch { /* Try legacy encodings. */ }
       }
       if (!encoding) {
+        // Native Script Encoder may emit non-UTF-8 VBE bytes and a final NUL.
+        // Preserve the exact upload for byte-oriented Decode instead of
+        // replacing undecodable bytes with Unicode replacement characters.
+        const latin1 = Array.from(b, byte => String.fromCharCode(byte)).join('');
+        const nulAt = b.indexOf(0);
+        const onlyTerminalNul = nulAt < 0 || (nulAt === b.length - 1);
+        if (onlyTerminalNul && latin1.includes('#@~^') && /\^#~@\x00?$/.test(latin1)) {
+          return { text: byteEscapePreview(b), encoding: 'raw-8bit',
+            method: 'Native raw VBE bytes; escaped UI preview',
+            rawByteView: true, outputEncoding: 'raw-8bit',
+            terminalNul: b[b.length - 1] === 0 };
+        }
         if (b.includes(0)) throw new Error('Undetermined Unicode encoding or binary data. No lossy import was performed.');
         const candidates = [];
         for (const label of ['euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252']) {
@@ -874,7 +975,7 @@ const VbeCodec = (() => {
       terminalNulIgnored: result.terminalNulIgnored };
   }
 
-  return Object.freeze({ encodeText, decodeText, decodeTextAuto, decodeStorageBytes, encodeBytes, decodeBytes,
+  return Object.freeze({ encodeText, encodeNativeFile, encodeNative8Bit, byteEscapePreview, decodeText, decodeTextAuto, decodeStorageBytes, encodeBytes, decodeBytes,
     encodeCharacters, decodeCharacters, detectEncoding, validateScalarText,
     validateSourceControls, chooseDownloadEncoding, saveTextAuto,
     readFileAuto, validateVbe, sourceControlIssues });

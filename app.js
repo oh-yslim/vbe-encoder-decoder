@@ -15,7 +15,8 @@
   const names = { ascii: 'ASCII', 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16 LE with BOM',
     'utf-16be': 'UTF-16 BE', 'utf-32le': 'UTF-32 LE', 'utf-32be': 'UTF-32 BE',
     'euc-kr': 'CP949', shift_jis: 'Shift-JIS / CP932', gbk: 'GBK / CP936',
-    big5: 'Big5 / CP950', 'windows-1252': 'Windows-1252' };
+    big5: 'Big5 / CP950', 'windows-1252': 'Windows-1252',
+    'raw-8bit': 'Native-compatible 8-bit bytes' };
   const label = (value) => names[value] || value;
   let originalText = null;
   let originalBytes = null;
@@ -70,7 +71,7 @@
     const value = sourceText();
     node('downloadInput').disabled = value.length === 0;
     try {
-      const chosen = outputEncoding(value);
+      const chosen = originalReadInfo?.rawByteView ? 'raw-8bit' : outputEncoding(value);
       const reading = originalReadInfo
         ? `File read as ${label(originalReadInfo.encoding)} (${originalReadInfo.method}). `
         : 'Text input. ';
@@ -102,10 +103,12 @@
       originalText = loaded.text;
       originalBytes = bytes;
       originalReadInfo = loaded;
+      input.readOnly = Boolean(loaded.rawByteView);
       fileName = (file.name.replace(/\.[^.]+$/, '') || 'script').replace(/[\\/:*?"<>|]/g, '_');
       input.value = loaded.text;
       refreshInputMeta();
-      status(`File loaded as ${label(loaded.encoding)}. Input is ready for conversion.`);
+      status(loaded.rawByteView ? 'Native 8-bit VBE loaded. The escaped-byte preview is read-only; Decode uses original bytes.' :
+        `File loaded as ${label(loaded.encoding)}. Input is ready for conversion.`);
       if (loaded.terminalNul) {
         details.textContent = 'A trailing NUL after the VBE closing marker was detected; only diagnostic decoding will ignore it.';
       } else if (loaded.method.startsWith('Heuristic')) {
@@ -115,6 +118,7 @@
       originalText = null;
       originalBytes = null;
       originalReadInfo = null;
+      input.readOnly = false;
       input.value = '';
       upload.value = '';
       refreshInputMeta();
@@ -126,6 +130,7 @@
     originalText = null;
     originalBytes = null;
     originalReadInfo = null;
+    input.readOnly = false;
     upload.value = '';
     clearResult();
     refreshInputMeta();
@@ -134,7 +139,10 @@
 
   function diagnosticText(report) {
     const lines = [];
-    if (report.interpretation?.method === 'storage-byte-recovery') {
+    if (report.interpretation?.method === 'heuristic-native-byte-recovery') {
+      lines.push('VBE interpretation: CP949 byte recovery (UNVERIFIED interpretation).');
+      lines.push('Several legacy code pages pass format checks. Other possible interpretations: ' + report.interpretation.candidates.join(' | '));
+    } else if (report.interpretation?.method === 'storage-byte-recovery') {
       lines.push(`VBE interpretation: STORAGE BYTE RECOVERY (${report.interpretation.label}).`);
       lines.push('Length/checksum match after byte-level processing. The native encoder may already have altered Unicode; character fidelity is NOT proven.');
     } else if (report.interpretation?.method === 'legacy-byte-reinterpretation') {
@@ -173,12 +181,14 @@
       let text = sourceText();
       if (!text) throw new Error('Select a file or enter text.');
       if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-      if (mode === 'encode') VbeCodec.validateSourceControls(text);
+      if (mode === 'encode' && !unchangedFileInfo()?.rawByteView) VbeCodec.validateSourceControls(text);
       const uploadedInfo = unchangedFileInfo();
-      const target = outputEncoding(text);
+      const target = uploadedInfo?.rawByteView ? 'raw-8bit' : outputEncoding(text);
       const codecEncoding = target === 'ascii' ? 'utf-8' : target;
       if (mode === 'encode') {
-        result = VbeCodec.encodeText(text, codecEncoding);
+        if (uploadedInfo?.rawByteView) throw new Error('An encoded VBE cannot be used as native VBS input. Decode it first.');
+        result = uploadedInfo ? VbeCodec.encodeNativeFile(originalBytes, uploadedInfo) :
+          VbeCodec.encodeText(text, codecEncoding);
         if (/[\u0080-\uFFFF]/.test(text)) {
           result.warnings.push('Non-ASCII VBE output has not been proven byte-identical to native screnc.exe. Windows execution must be checked separately.');
         }
@@ -191,23 +201,26 @@
         result = byteResult && !byteResult.ambiguous
           ? byteResult : VbeCodec.decodeTextAuto(text);
       }
-      const stored = uploadedInfo
-        ? writeResultWithOriginalEncoding(result.text, uploadedInfo)
-        : VbeCodec.saveTextAuto(result.text);
+      const stored = (result.storageMode || (uploadedInfo?.rawByteView && mode === 'decode'))
+        ? { bytes: result.bytes, encoding: result.encoding, bom: result.storageMode === 'unicode-file' && originalBytes[0] === 0xff }
+        : uploadedInfo ? writeResultWithOriginalEncoding(result.text, uploadedInfo)
+          : VbeCodec.saveTextAuto(result.text);
       result.bytes = stored.bytes;
       result.encoding = stored.encoding;
       output.value = result.text;
       const unverified = mode === 'decode' && !result.verified;
       unverifiedRow.hidden = !unverified;
       allowUnverified.checked = false;
-      node('copy').disabled = false;
+      node('copy').disabled = Boolean(result.previewEscaped);
       node('download').disabled = unverified;
       const ext = mode === 'encode' ? '.vbe' : '.vbs';
       node('download').textContent = `Download Result ${ext}${unverified ? ' (Unverified)' : ''}`;
-      const inherited = uploadedInfo ? 'Original uploaded file encoding retained. ' : 'Automatic encoding from current characters. ';
+      const inherited = result.previewEscaped ? 'Escaped byte preview only; download to obtain exact VBE bytes. ' :
+        uploadedInfo ? 'Original uploaded file format retained. ' : 'Automatic encoding from current characters. ';
       resultMeta.textContent = `Result download encoding: ${label(result.encoding)}${stored.bom ? ' (BOM)' : ''}. ${inherited}${unverified ? 'Recovery is UNVERIFIED.' : ''}`;
       if (mode === 'encode') {
-        status(`VBE generated. Download format: ${label(result.encoding)}.${result.verified === false ? ' Native screnc.exe parity is not verified.' : ''}`);
+        status(result.previewEscaped ? 'Native-style 8-bit VBE generated. Download the exact bytes; the displayed byte escapes are not a pasteable VBE.' :
+          `VBE generated. Download format: ${label(result.encoding)}.${result.verified === false ? ' Native screnc.exe parity is not verified.' : ''}`);
         details.textContent = result.warnings.length ? result.warnings.join('\n') : 'Windows Script Host execution has not been tested.';
       } else if (unverified) {
         status(`Unverified recovery: ${result.blockCount} VBE block(s), ${result.warnings.length} warning(s). Recovered text is shown for inspection only.`, true);
@@ -236,7 +249,13 @@
   node('decode').addEventListener('click', () => run('decode'));
   node('validate').addEventListener('click', () => {
     try {
-      const validation = VbeCodec.validateVbe(sourceText());
+      const validation = originalReadInfo?.rawByteView ? (() => {
+        const report = VbeCodec.decodeStorageBytes(originalBytes, 'raw-8bit');
+        if (!report || report.ambiguous) throw new Error('No uniquely verified interpretation found for the uploaded raw VBE.');
+        return { blocks: report.blockCount, warnings: report.warnings, valid: report.verified,
+          diagnostics: report.diagnostics, controls: report.controls,
+          interpretation: report.interpretation };
+      })() : VbeCodec.validateVbe(sourceText());
       status(validation.valid
         ? `VBE format checks passed for ${validation.blocks} block(s). This is not an execution test.`
         : `VBE is unverified: ${validation.warnings.length} warning(s).`, !validation.valid);
@@ -274,8 +293,8 @@
     try {
       const text = sourceText();
       if (!text) throw new Error('Input is empty.');
-      if (!text.includes('#@~^')) VbeCodec.validateSourceControls(text);
-      const isVbe = text.includes('#@~^') && text.includes('^#~@');
+      if (!text.includes('#@~^') && !originalReadInfo?.rawByteView) VbeCodec.validateSourceControls(text);
+      const isVbe = (text.includes('#@~^') && text.includes('^#~@')) || Boolean(originalReadInfo?.rawByteView);
       if (originalBytes && originalText === text) {
         download(originalBytes, `${fileName}${isVbe ? '.vbe' : '.vbs'}`);
         status('Input downloaded byte-for-byte unchanged from the uploaded file.');
@@ -298,6 +317,7 @@
     originalText = text;
     originalBytes = null;
     originalReadInfo = null;
+    input.readOnly = false;
     input.value = text;
     upload.value = '';
     fileName = name;
@@ -310,6 +330,7 @@
     originalText = null;
     originalBytes = null;
     originalReadInfo = null;
+    input.readOnly = false;
     input.value = '';
     upload.value = '';
     fileName = 'script';
