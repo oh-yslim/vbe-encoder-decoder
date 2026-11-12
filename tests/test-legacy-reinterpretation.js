@@ -12,7 +12,8 @@ function buildLegacyInterpretationFixture(characters) {
   const canonicalVbe = codec.encodeText(expectedSource, 'gbk').text;
   const legacyBytes = codec.encodeCharacters(canonicalVbe, 'gbk');
   const displayedVbe = new TextDecoder('utf-8', { fatal: true }).decode(legacyBytes);
-  return { expectedSource, displayedVbe };
+  const originalSource = `Option Explicit\r\n' ${characters}\r\nWScript.Echo "OK"\r\n`;
+  return { expectedSource, originalSource, displayedVbe };
 }
 
 test('valid ASCII VBE still uses the direct decoder', () => {
@@ -29,8 +30,8 @@ test('UTF-8 displayed VBE can be restored by strictly validated GBK reinterpreta
   assert.equal(before.verified, false);
   const result = codec.decodeTextAuto(fixture.displayedVbe);
   assert.equal(result.verified, true);
-  assert.equal(result.interpretation.method, 'legacy-byte-reinterpretation');
-  assert.equal(result.text, fixture.expectedSource);
+  assert.equal(result.interpretation.method, 'storage-byte-recovery');
+  assert.equal(result.text, fixture.originalSource);
   assert.ok(result.diagnostics.every(block => block.lengthMatch && block.checksumMatch));
   assert.equal(result.controls.count, 0);
 });
@@ -45,7 +46,7 @@ test('UTF-16 LE BOM upload and UTF-8 upload reach same recovery', () => {
     const imported = codec.readFileAuto(bytes);
     const report = codec.decodeTextAuto(imported.text);
     assert.equal(report.verified, true);
-    assert.equal(report.text, fixture.expectedSource);
+    assert.equal(report.text, fixture.originalSource);
   }
 });
 

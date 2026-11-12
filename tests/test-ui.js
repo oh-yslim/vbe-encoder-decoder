@@ -122,9 +122,9 @@ test('UI can decode a valid legacy-byte interpretation without modifying the pas
   ui.get('input').value = displayed;
   await ui.get('input').emit('input');
   await ui.get('decode').emit('click');
-  assert.equal(ui.get('output').value, source);
+  assert.equal(ui.get('output').value, `Option Explicit\r\n' 黔ㆃ§\r\nWScript.Echo "OK"\r\n`);
   assert.equal(ui.get('input').value, displayed);
-  assert.match(ui.get('details').textContent, /byte reinterpretation/i);
+  assert.match(ui.get('details').textContent, /STORAGE BYTE RECOVERY/i);
 });
 
 test('UI Download Input preserves unchanged uploaded bytes exactly', async () => {
@@ -138,4 +138,54 @@ test('UI Download Input preserves unchanged uploaded bytes exactly', async () =>
   await ui.get('downloadInput').emit('click');
   const blob = ui.blobs.get(ui.download().url);
   assert.deepEqual(Buffer.from(await blob.arrayBuffer()), Buffer.from(rawBytes));
+});
+
+// Uploaded file storage is preserved on Result export until Input is edited.
+test('Unedited UTF-8 BOM upload retains UTF-8 BOM for encoded output', async () => {
+  const ui = makeUi();
+  const plain = 'Option Explicit\r\n\' 한글 日本語 中文 😀\r\nWScript.Echo "OK"\r\n';
+  const bytes = VbeCodec.encodeCharacters(plain, 'utf-8', true);
+  ui.get('upload').files = [{ name: 'utf8-bom.vbs', size: bytes.length,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); } }];
+  await ui.get('upload').emit('change');
+  assert.match(ui.get('message').textContent, /File loaded/);
+  assert.match(ui.get('inputMeta').textContent, /result preserves UTF-8/);
+  await ui.get('encode').emit('click');
+  await ui.get('download').emit('click');
+  let stored = Buffer.from(await ui.blobs.get(ui.download().url).arrayBuffer());
+  assert.deepEqual([...stored.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(new TextDecoder('utf-8', { fatal: true }).decode(stored).slice(0, 4), '#@~^');
+  ui.get('input').value = plain + "' Edited\r\n";
+  await ui.get('input').emit('input');
+  await ui.get('encode').emit('click');
+  await ui.get('download').emit('click');
+  stored = Buffer.from(await ui.blobs.get(ui.download().url).arrayBuffer());
+  assert.deepEqual([...stored.subarray(0, 2)], [0xff, 0xfe]);
+});
+
+test('Unedited UTF-32BE input retains UTF-32BE on Result export', async () => {
+  const ui = makeUi();
+  const plain = 'Option Explicit\r\n\' 한글 中文\r\nWScript.Echo "OK"\r\n';
+  const bytes = VbeCodec.encodeCharacters(plain, 'utf-32be', true);
+  ui.get('upload').files = [{ name: 'unicode-32.vbs', size: bytes.length,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); } }];
+  await ui.get('upload').emit('change');
+  assert.match(ui.get('message').textContent, /File loaded/);
+  await ui.get('encode').emit('click');
+  await ui.get('download').emit('click');
+  const stored = Buffer.from(await ui.blobs.get(ui.download().url).arrayBuffer());
+  assert.deepEqual([...stored.subarray(0, 4)], [0x00, 0x00, 0xfe, 0xff]);
+});
+
+test('Byte-oriented recovery does not reinterpret recovered Unicode as CP949 characters', () => {
+  const source = "Option Explicit\r\n' 黔ㆃ§\r\nWScript.Echo \"OK\"\r\n";
+  const utf8 = new TextEncoder().encode('黔ㆃ§');
+  const gbkText = new TextDecoder('gbk', { fatal: true }).decode(utf8);
+  const legacySource = source.replace('黔ㆃ§', gbkText);
+  const encoded = VbeCodec.encodeText(legacySource, 'gbk').text;
+  const stored = VbeCodec.encodeCharacters(encoded, 'gbk');
+  const recovered = VbeCodec.decodeStorageBytes(stored, 'utf-8');
+  assert.equal(recovered.text, source);
+  assert.deepEqual(recovered.warnings, []);
+  assert.ok(recovered.diagnostics.every(x => x.lengthMatch && x.checksumMatch));
 });

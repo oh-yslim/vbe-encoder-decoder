@@ -12,7 +12,8 @@ function example() {
   const text = codec.encodeText(source, 'gbk').text;
   const byteSequence = codec.encodeCharacters(text, 'gbk');
   const utf8Displayed = new TextDecoder('utf-8', { fatal: true }).decode(byteSequence);
-  return { source, utf8Displayed };
+  const originalSource = `Option Explicit\r\n' ${literal}\r\nWScript.Echo "OK"\r\n`;
+  return { source, originalSource, utf8Displayed };
 }
 
 test('UTF-8 BOM-less VBE + terminal NUL loads without binary rejection', () => {
@@ -24,11 +25,11 @@ test('UTF-8 BOM-less VBE + terminal NUL loads without binary rejection', () => {
   assert.equal(loaded.text, fixture.utf8Displayed + '\0');
   const report = codec.decodeTextAuto(loaded.text);
   assert.equal(report.verified, true);
-  assert.equal(report.text, fixture.source);
+  assert.equal(report.text, fixture.originalSource);
   assert.equal(report.diagnostics[0].lengthMatch, true);
   assert.equal(report.diagnostics[0].checksumMatch, true);
-  assert.equal(report.terminalNulIgnored, true);
-  assert.equal(report.interpretation.method, 'legacy-byte-reinterpretation');
+  assert.match(report.notices.join(' '), /Byte-oriented VBE/);
+  assert.equal(report.interpretation.method, 'storage-byte-recovery');
 });
 
 test('Windows terminal NUL does not make a clean ASCII VBE unverified', () => {

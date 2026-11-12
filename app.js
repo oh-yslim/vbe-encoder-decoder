@@ -39,6 +39,22 @@
     return VbeCodec.chooseDownloadEncoding(text);
   }
 
+  function unchangedFileInfo() {
+    return originalBytes && originalReadInfo && originalText !== null
+      ? originalReadInfo : null;
+  }
+
+  function writeResultWithOriginalEncoding(text, info) {
+    const raw = originalBytes;
+    const bom = (raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) ||
+      (raw[0] === 0xff && raw[1] === 0xfe) ||
+      (raw[0] === 0xfe && raw[1] === 0xff) ||
+      (raw.length >= 4 && raw[0] === 0 && raw[1] === 0 && raw[2] === 0xfe && raw[3] === 0xff);
+    const charset = info.encoding;
+    const bytes = VbeCodec.encodeCharacters(text, charset, bom);
+    return { bytes, encoding: charset, bom };
+  }
+
   function clearResult() {
     result = null;
     output.value = '';
@@ -59,7 +75,7 @@
         ? `File read as ${label(originalReadInfo.encoding)} (${originalReadInfo.method}). `
         : 'Text input. ';
       inputMeta.textContent = originalBytes && originalText === value
-        ? `${reading}Input download: unchanged original file bytes. If edited, export will use ${label(chosen)}.`
+        ? `${reading}Unedited file: result preserves ${label(originalReadInfo.encoding)}. Input download retains original bytes. If edited, exports use ${label(chosen)}.`
         : `${reading}Input download encoding: ${label(chosen)}. (All characters, including comments, are considered.)`;
     } catch (error) {
       inputMeta.textContent = `Input cannot be saved: ${error.message}`;
@@ -118,7 +134,10 @@
 
   function diagnosticText(report) {
     const lines = [];
-    if (report.interpretation?.method === 'legacy-byte-reinterpretation') {
+    if (report.interpretation?.method === 'storage-byte-recovery') {
+      lines.push(`VBE interpretation: STORAGE BYTE RECOVERY (${report.interpretation.label}).`);
+      lines.push('Length/checksum match after byte-level processing. The native encoder may already have altered Unicode; character fidelity is NOT proven.');
+    } else if (report.interpretation?.method === 'legacy-byte-reinterpretation') {
       lines.push(`VBE interpretation: ${report.interpretation.label} (automatic UTF-8 byte reinterpretation).`);
       lines.push('Length and checksum match after reinterpretation. Original character meanings and Windows execution are NOT guaranteed.');
     } else if (report.interpretation?.method === 'heuristic-legacy-byte-reinterpretation') {
@@ -155,12 +174,26 @@
       if (!text) throw new Error('Select a file or enter text.');
       if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
       if (mode === 'encode') VbeCodec.validateSourceControls(text);
+      const uploadedInfo = unchangedFileInfo();
       const target = outputEncoding(text);
       const codecEncoding = target === 'ascii' ? 'utf-8' : target;
-      result = mode === 'encode'
-        ? VbeCodec.encodeText(text, codecEncoding)
-        : VbeCodec.decodeTextAuto(text);
-      const stored = VbeCodec.saveTextAuto(result.text);
+      if (mode === 'encode') {
+        result = VbeCodec.encodeText(text, codecEncoding);
+        if (/[\u0080-\uFFFF]/.test(text)) {
+          result.warnings.push('Non-ASCII VBE output has not been proven byte-identical to native screnc.exe. Windows execution must be checked separately.');
+        }
+      } else {
+        const byteCompatible = uploadedInfo &&
+          !['utf-16le', 'utf-16be', 'utf-32le', 'utf-32be'].includes(uploadedInfo.encoding);
+        const byteResult = byteCompatible
+          ? VbeCodec.decodeStorageBytes(originalBytes, uploadedInfo.encoding)
+          : null;
+        result = byteResult && !byteResult.ambiguous
+          ? byteResult : VbeCodec.decodeTextAuto(text);
+      }
+      const stored = uploadedInfo
+        ? writeResultWithOriginalEncoding(result.text, uploadedInfo)
+        : VbeCodec.saveTextAuto(result.text);
       result.bytes = stored.bytes;
       result.encoding = stored.encoding;
       output.value = result.text;
@@ -171,18 +204,22 @@
       node('download').disabled = unverified;
       const ext = mode === 'encode' ? '.vbe' : '.vbs';
       node('download').textContent = `Download Result ${ext}${unverified ? ' (Unverified)' : ''}`;
-      resultMeta.textContent = `Result download encoding: ${label(result.encoding)}. ${unverified ? 'Recovery is UNVERIFIED.' : ''}`;
+      const inherited = uploadedInfo ? 'Original uploaded file encoding retained. ' : 'Automatic encoding from current characters. ';
+      resultMeta.textContent = `Result download encoding: ${label(result.encoding)}${stored.bom ? ' (BOM)' : ''}. ${inherited}${unverified ? 'Recovery is UNVERIFIED.' : ''}`;
       if (mode === 'encode') {
-        status(`VBE created. Download format: ${label(result.encoding)}.`);
+        status(`VBE generated. Download format: ${label(result.encoding)}.${result.verified === false ? ' Native screnc.exe parity is not verified.' : ''}`);
         details.textContent = result.warnings.length ? result.warnings.join('\n') : 'Windows Script Host execution has not been tested.';
       } else if (unverified) {
         status(`Unverified recovery: ${result.blockCount} VBE block(s), ${result.warnings.length} warning(s). Recovered text is shown for inspection only.`, true);
         details.textContent = diagnosticText(result);
       } else {
         const reinterpretation = result.interpretation?.method === 'legacy-byte-reinterpretation';
-        status(reinterpretation
-          ? `Recovered ${result.blockCount} VBE block(s) using automatic legacy-byte reinterpretation. Length and checksum match; character meaning and Windows execution are not guaranteed.`
-          : `Decoded ${result.blockCount} VBE block(s). Format checks passed; Windows execution is untested.`);
+        const storageByteMode = result.interpretation?.method === 'storage-byte-recovery';
+        status(storageByteMode
+          ? `Recovered ${result.blockCount} VBE block(s) from storage bytes. VBE metadata matches, but the original Unicode text is NOT independently verified.`
+          : reinterpretation
+            ? `Recovered ${result.blockCount} VBE block(s) using automatic legacy-byte reinterpretation. Length and checksum match; character meaning and Windows execution are not guaranteed.`
+            : `Decoded ${result.blockCount} VBE block(s). Format checks passed; Windows execution is untested.`);
         details.textContent = diagnosticText(result);
       }
     } catch (error) {

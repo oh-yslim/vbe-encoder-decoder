@@ -76,9 +76,24 @@ const VbeCodec = (() => {
     return false;
   }
 
+  const dbcsPairValidCache = new Map();
+
+  function validDbcsPair(lead, trail, encoding) {
+    if (!isDbcsLead(lead, encoding) || !isDbcsTrail(trail, encoding)) return false;
+    const key = `${encoding}:${lead}:${trail}`;
+    if (dbcsPairValidCache.has(key)) return dbcsPairValidCache.get(key);
+    let valid = false;
+    try {
+      const value = new TextDecoder(encoding, { fatal: true }).decode(Uint8Array.of(lead, trail));
+      valid = value.length > 0 && !value.includes('\uFFFD');
+    } catch { /* Invalid two-byte code-page sequence. */ }
+    dbcsPairValidCache.set(key, valid);
+    return valid;
+  }
+
   function normalizeEncoding(encoding, bytes) {
     if (!encoding || encoding === 'auto') return bytes ? detectEncoding(bytes) : 'utf-8';
-    if (['utf-8', 'euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252', 'utf-16le', 'utf-16be'].includes(encoding)) return encoding;
+    if (['utf-8', 'euc-kr', 'shift_jis', 'gbk', 'big5', 'windows-1252', 'utf-16le', 'utf-16be', 'utf-32le', 'utf-32be'].includes(encoding)) return encoding;
     throw new Error(`Unsupported text encoding: ${encoding}`);
   }
 
@@ -255,6 +270,150 @@ const VbeCodec = (() => {
       diagnostics, controls, terminalNulIgnored: hasTerminalNul, verified };
   }
 
+  // Recover VBE substitutions from storage bytes before interpreting recovered text.
+  // In legacy Windows code pages, a DBCS lead byte and its trail byte occupy
+  // one VBE logical unit. Treating both bytes as separate Unicode characters
+  // can change the selector position and corrupt otherwise intact ASCII.
+  function decodeBytePayload(payload, codePage) {
+    const output = [];
+    let selectorIndex = 0;
+    let checksum = 0;
+    let encodedUnits = 0;
+    for (let i = 0; i < payload.length; i++) {
+      const byte = payload[i];
+      if (codePage && i + 1 < payload.length && validDbcsPair(byte, payload[i + 1], codePage)) {
+        output.push(byte, payload[++i]);
+        encodedUnits++;
+        continue;
+      }
+      if (byte >= 128) {
+        output.push(byte);
+        encodedUnits++;
+        continue;
+      }
+      let plain = byte;
+      if (byte === 64) {
+        const suffix = payload[++i];
+        if (!Object.prototype.hasOwnProperty.call(escapeToByte, suffix)) {
+          throw new Error('Invalid VBE byte escape.');
+        }
+        plain = escapeToByte[suffix];
+        encodedUnits += 2;
+      } else {
+        if (transformable(byte)) plain = decodeMap[selectors[selectorIndex % 64]][byte];
+        encodedUnits++;
+      }
+      output.push(plain);
+      checksum = (checksum + plain) >>> 0;
+      selectorIndex++;
+    }
+    return { bytes: Uint8Array.from(output), checksum, encodedUnits };
+  }
+
+  function decodeStorageBytes(bytes, storageEncoding = 'utf-8') {
+    if (!(bytes instanceof Uint8Array)) throw new Error('Byte input is required.');
+    const input = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+      ? bytes.subarray(3) : bytes;
+    // This path is for ASCII-compatible file encodings. UTF-16/32 are first
+    // converted to displayed Unicode text by the normal importer.
+    const asBytes = Array.from(input, byte => String.fromCharCode(byte)).join('');
+    const pattern = /#@~\^([A-Za-z0-9+/]{6}==)([\s\S]*?)([A-Za-z0-9+/]{6}==)\^#~@/g;
+    const candidates = [];
+    const options = [
+      ['euc-kr', 'Korean DBCS / CP949'],
+      ['gbk', 'Chinese DBCS / CP936'],
+      ['shift_jis', 'Japanese DBCS / CP932'],
+      ['big5', 'Traditional Chinese DBCS / CP950'],
+      [null, 'Single-byte / UTF-8 byte scan']
+    ];
+    for (const [codePage, description] of options) {
+      const output = [];
+      let lastEnd = 0;
+      let blocks = 0;
+      let valid = true;
+      const diagnostics = [];
+      pattern.lastIndex = 0;
+      for (const match of asBytes.matchAll(pattern)) {
+        blocks++;
+        const offset = match.index;
+        for (let i = lastEnd; i < offset; i++) output.push(input[i]);
+        const payloadOffset = offset + 12;
+        const payload = input.subarray(payloadOffset, payloadOffset + match[2].length);
+        let transformed;
+        try { transformed = decodeBytePayload(payload, codePage); }
+        catch { valid = false; break; }
+        const declaredLength = base64ToInt(match[1]);
+        const declaredChecksum = base64ToInt(match[3]);
+        const lengthMatch = declaredLength === transformed.encodedUnits;
+        const checksumMatch = declaredChecksum === transformed.checksum;
+        diagnostics.push({ index: blocks, declaredLength, actualLength: transformed.encodedUnits,
+          declaredChecksum, calculatedChecksum: transformed.checksum,
+          lengthMatch, checksumMatch,
+          encodedDelCount: Array.from(payload).filter(byte => byte === 127).length,
+          encodedUnicodeUnits: Array.from(payload).filter(byte => byte >= 128).length });
+        if (!lengthMatch || !checksumMatch) { valid = false; break; }
+        output.push(...transformed.bytes);
+        lastEnd = offset + match[0].length;
+      }
+      if (!blocks || !valid) continue;
+      for (let i = lastEnd; i < input.length; i++) {
+        if (!(i === input.length - 1 && input[i] === 0 && asBytes.slice(0, -1).endsWith('^#~@'))) {
+          output.push(input[i]);
+        }
+      }
+      const recoveredBytes = Uint8Array.from(output);
+      let text = null;
+      let recoveredEncoding = storageEncoding;
+      const decoders = [...new Set([storageEncoding, 'utf-8'])];
+      for (const decoder of decoders) {
+        try {
+          text = decodeCharacters(recoveredBytes, decoder === 'ascii' ? 'utf-8' : decoder);
+          if (sameBytes(encodeCharacters(text, decoder === 'ascii' ? 'utf-8' : decoder), recoveredBytes)) {
+            recoveredEncoding = decoder;
+            break;
+          }
+          text = null;
+        } catch { text = null; }
+      }
+      if (text === null) continue;
+      try { validateScalarText(text); }
+      catch { continue; }
+      const controls = sourceControlIssues(text);
+      if (controls.count) continue;
+      candidates.push({ text, codePage, description, diagnostics, controls,
+        recoveredEncoding, recoveredBytes });
+    }
+    if (!candidates.length) return null;
+    const distinct = [];
+    for (const candidate of candidates) {
+      const same = distinct.find(item => item.text === candidate.text &&
+        sameBytes(item.recoveredBytes, candidate.recoveredBytes));
+      if (same) same.descriptions.push(candidate.description);
+      else distinct.push({ ...candidate, descriptions: [candidate.description] });
+    }
+    if (distinct.length !== 1) return { ambiguous: true,
+      candidates: distinct.map(item => item.descriptions.join(' / ')) };
+    const chosen = distinct[0];
+    return {
+      text: chosen.text,
+      bytes: chosen.recoveredBytes,
+      encoding: chosen.recoveredEncoding,
+      blockCount: chosen.diagnostics.length,
+      warnings: [],
+      notices: ['Byte-oriented VBE metadata matched. This does not prove that screnc.exe preserved the original Unicode text.'],
+      diagnostics: chosen.diagnostics,
+      controls: chosen.controls,
+      verified: true,
+      interpretation: {
+        method: 'storage-byte-recovery',
+        label: chosen.descriptions.join(' / '),
+        candidates: chosen.descriptions,
+        candidateCount: chosen.descriptions.length,
+        note: 'Encoded bytes were processed before decoding recovered script text.'
+      }
+    };
+  }
+
   // Decode the displayed Unicode text normally first. Only if its integrity
   // checks fail, interpret its UTF-8 byte representation with legacy code pages.
   // This handles VBE data whose original encoded-body metadata was computed
@@ -280,6 +439,9 @@ const VbeCodec = (() => {
 
     validateScalarText(source);
     const bytes = new TextEncoder().encode(source.replace(/^\uFEFF/, ''));
+    const byteResult = decodeStorageBytes(bytes, 'utf-8');
+    if (byteResult && !byteResult.ambiguous) return byteResult;
+
     const candidates = [];
     const codePages = [
       ['euc-kr', 'Korean (CP949-compatible browser decoder)'],
@@ -472,7 +634,26 @@ const VbeCodec = (() => {
   }
 
   function encodeCharacters(text, encoding, withBom = false) {
-    if (encoding === 'utf-8') return new TextEncoder().encode(text);
+    if (encoding === 'utf-8') {
+      const bytes = new TextEncoder().encode(text);
+      return withBom ? Uint8Array.from([0xef, 0xbb, 0xbf, ...bytes]) : bytes;
+    }
+    if (encoding === 'ascii') {
+      if (!/^[\x00-\x7f]*$/.test(text)) throw new Error('Non-ASCII character cannot be written as ASCII.');
+      return Uint8Array.from(text, character => character.charCodeAt(0));
+    }
+    if (encoding === 'utf-32le' || encoding === 'utf-32be') {
+      validateScalarText(text);
+      const bytes = [];
+      const little = encoding === 'utf-32le';
+      if (withBom) bytes.push(...(little ? [255, 254, 0, 0] : [0, 0, 254, 255]));
+      for (const symbol of text) {
+        const code = symbol.codePointAt(0);
+        if (little) bytes.push(code & 255, (code >>> 8) & 255, (code >>> 16) & 255, code >>> 24);
+        else bytes.push(code >>> 24, (code >>> 16) & 255, (code >>> 8) & 255, code & 255);
+      }
+      return Uint8Array.from(bytes);
+    }
     if (isUtf16(encoding)) {
       const bytes = [];
       const little = encoding === 'utf-16le';
@@ -693,7 +874,7 @@ const VbeCodec = (() => {
       terminalNulIgnored: result.terminalNulIgnored };
   }
 
-  return Object.freeze({ encodeText, decodeText, decodeTextAuto, encodeBytes, decodeBytes,
+  return Object.freeze({ encodeText, decodeText, decodeTextAuto, decodeStorageBytes, encodeBytes, decodeBytes,
     encodeCharacters, decodeCharacters, detectEncoding, validateScalarText,
     validateSourceControls, chooseDownloadEncoding, saveTextAuto,
     readFileAuto, validateVbe, sourceControlIssues });
