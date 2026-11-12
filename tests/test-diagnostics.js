@@ -53,8 +53,10 @@ test('single terminal NUL after marker is accepted for import and diagnosed', ()
   const report = codec.decodeText(loaded.text);
   assert.equal(report.text, 'WScript.Echo "Safe fixture"\r\n');
   assert.equal(report.terminalNulIgnored, true);
-  assert.equal(report.verified, false);
+  assert.equal(report.verified, true);
   assert.equal(report.controls.count, 0);
+  assert.equal(report.warnings.length, 0);
+  assert.ok(report.notices.some(message => message.includes('terminal NUL')));
 });
 
 test('NUL inside encoded data is not silently removed', () => {

@@ -141,6 +141,7 @@
     } else {
       lines.push('Recovered text: no unusual control characters detected.');
     }
+    for (const notice of report.notices || []) lines.push(`INFO: ${notice}`);
     for (const warning of report.warnings || []) lines.push(`WARNING: ${warning}`);
     lines.push('Windows Script Host execution: NOT TESTED. Do not execute unverified results.');
     return lines.join('\n');

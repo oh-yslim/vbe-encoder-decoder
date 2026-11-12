@@ -206,6 +206,7 @@ const VbeCodec = (() => {
     if (typeof source !== 'string') throw new Error('Text input is required.');
     const charset = normalizeEncoding(encoding);
     const warnings = [];
+    const notices = [];
     const diagnostics = [];
     let blockCount = 0;
     // Some native COM encoder outputs have a single NUL after the closing marker.
@@ -213,7 +214,7 @@ const VbeCodec = (() => {
     const hasTerminalNul = source.endsWith('^#~@\0');
     const input = hasTerminalNul ? source.slice(0, -1) : source;
     if (hasTerminalNul) {
-      warnings.push('Trailing NUL terminator after the VBE closing marker was ignored for decoding.');
+      notices.push('One terminal NUL after the VBE closing marker was ignored for decoding.');
     }
     markers.lastIndex = 0;
     const decoded = input.replace(markers, (match, declaredLength, payload, declaredChecksum) => {
@@ -250,7 +251,7 @@ const VbeCodec = (() => {
     const verified = warnings.length === 0;
     // Encoding selection affects input/output bytes, never the character substitution.
     const bytes = encodeCharacters(decoded, charset, isUtf16(charset));
-    return { text: decoded, bytes, encoding: charset, blockCount, warnings,
+    return { text: decoded, bytes, encoding: charset, blockCount, warnings, notices,
       diagnostics, controls, terminalNulIgnored: hasTerminalNul, verified };
   }
 
@@ -557,6 +558,13 @@ const VbeCodec = (() => {
     return first.length === second.length && first.every((byte, index) => byte === second[index]);
   }
 
+  // Only a single NUL immediately following a complete VBE closing marker
+  // is a permissible input terminator; embedded NULs remain invalid.
+  function plausibleImportedText(text) {
+    const hasTerminalNul = text.endsWith('^#~@\0');
+    return plausibleScriptText(hasTerminalNul ? text.slice(0, -1) : text);
+  }
+
   function plausibleScriptText(text) {
     if (!text.length || text.includes('\ufffd')) return false;
     for (let index = 0; index < text.length; index++) {
@@ -644,7 +652,7 @@ const VbeCodec = (() => {
       if (!encoding) {
         try {
           text = new TextDecoder('utf-8', { fatal: true }).decode(b);
-          if (plausibleScriptText(text)) { encoding = 'utf-8'; method = 'Valid UTF-8'; }
+          if (plausibleImportedText(text)) { encoding = 'utf-8'; method = 'Valid UTF-8'; }
         } catch { /* Try legacy encodings. */ }
       }
       if (!encoding) {
@@ -670,8 +678,7 @@ const VbeCodec = (() => {
     // Accept only a final NUL after a complete VBE closing marker. Keep the
     // original text for export; the diagnostic decoder ignores the terminator.
     const terminalNul = text.endsWith('^#~@\0');
-    const textToCheck = terminalNul ? text.slice(0, -1) : text;
-    if (!plausibleScriptText(textToCheck)) {
+    if (!plausibleImportedText(text)) {
       throw new Error('The file contains invalid text control characters or undecodable data.');
     }
     return { text, encoding, method, outputEncoding: chooseDownloadEncoding(text), terminalNul };

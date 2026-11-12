@@ -1,8 +1,16 @@
-# VBE Codec v3.6.0
+# VBE Codec v3.6.1
 
 A self-contained Microsoft Script Encoder (`.vbs` / `.vbe`) tool for GitHub Pages. There is **no backend, no external JavaScript dependency, and no execution of submitted VBScript**. The interface, documentation, and source comments are in English. The project is an independently authored browser implementation of the publicly described VBE format, not a fork of the PowerShell repository.
 
 VBE is **obfuscation, not encryption**. Do not execute untrusted scripts.
+
+## v3.6.1: Valid VBE terminal NUL and UTF-8 imports
+
+- Some native Windows Script Encoder outputs contain a single NUL after the final `^#~@` marker. Earlier UTF-8 imports incorrectly classified these as binary, despite valid UTF-8 bytes.
+- Import now accepts **only** this specific terminal NUL (never an interior NUL or an arbitrary NUL at the end of a `.vbs` file). Original bytes are preserved for Download Input.
+- The terminal NUL is listed as informational, not as a checksum or integrity failure. This allows legitimate legacy-byte reinterpretation candidates to pass their length and checksum checks.
+- No user-uploaded VBE samples are bundled. The regression test uses a harmless synthetic fixture with a known encoded representation.
+- A valid UTF-8 representation of the VBE byte stream does not prove the decoded comments' original character identity; never describe this as full Unicode recovery without a verified original.
 
 ## v3.6.0: Independent legacy-byte interpretation for VBE decoding
 
