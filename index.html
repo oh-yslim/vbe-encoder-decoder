@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Privacy-first, browser-only VBE encoder and decoder with automatic Unicode-safe downloads.">
   <title>VBE Codec | Encoder &amp; Decoder</title>
-  <link rel="stylesheet" href="./style.css?v=3.5.0">
-  <script src="./codec.js?v=3.5.0" defer></script>
-  <script src="./app.js?v=3.5.0" defer></script>
+  <link rel="stylesheet" href="./style.css?v=3.6.0">
+  <script src="./codec.js?v=3.6.0" defer></script>
+  <script src="./app.js?v=3.6.0" defer></script>
 </head>
 <body>
   <main class="wrap">
@@ -33,7 +33,7 @@
           <input id="upload" type="file" accept=".vbs,.vbe,.txt,.jse,.js,text/plain">
         </label>
       </div>
-      <p class="muted help">Files are read using BOM/Unicode checks and guarded legacy-code-page detection. Ambiguous inputs are rejected rather than silently misdecoded. Download encoding is chosen from the current text, not the original file format.</p>
+      <p class="muted help">Files are read using BOM/Unicode checks and guarded legacy-code-page detection. Ambiguous file encodings are rejected rather than silently misdecoded. VBE decoding additionally checks strict legacy-byte interpretations only when the displayed Unicode text fails integrity checks. Download encoding is chosen from the current text, not the original file format.</p>
       <label for="input" class="field-label">Or paste text</label>
       <textarea id="input" spellcheck="false" translate="no" placeholder="Paste VBScript source or #@~^...^#~@ VBE content."></textarea>
       <p id="inputMeta" class="encoding-info" aria-live="polite">Download encoding: ASCII (when the input is ASCII-only), otherwise UTF-16 LE with BOM.</p>
@@ -64,9 +64,9 @@
 
     <footer>
       VBE is obfuscation, not encryption. Never execute scripts from untrusted sources.
-      <p>Downloads: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. Invalid source controls and unpaired surrogates are rejected.</p>
-      <p>Diagnostic decoding can display unverified text even if length, checksum, or recovered-control checks fail. Unverified downloads require explicit acknowledgement. Validation does not execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
-      <p>v3.5.0 · All processing takes place in your browser.</p>
+      <p>Text exports: ASCII when all characters are U+0000–U+007F; UTF-16 LE with BOM otherwise, including Unicode in comments. Unedited uploaded Inputs download byte-for-byte unchanged. Invalid source controls and unpaired surrogates are rejected.</p>
+      <p>Diagnostic decoding can display unverified text even if length, checksum, or recovered-control checks fail. An automatic legacy-byte interpretation is accepted only when length, checksum, and recovered control checks pass unambiguously. Unverified downloads require explicit acknowledgement. Validation does not execute VBScript or guarantee Windows Script Host compatibility. BOM-less legacy files may have an undetectable or ambiguous code page.</p>
+      <p>v3.6.0 · All processing takes place in your browser.</p>
     </footer>
   </main>
 </body>

@@ -18,6 +18,7 @@
     big5: 'Big5 / CP950', 'windows-1252': 'Windows-1252' };
   const label = (value) => names[value] || value;
   let originalText = null;
+  let originalBytes = null;
   let originalReadInfo = null;
   let fileName = 'script';
   let result = null;
@@ -57,7 +58,9 @@
       const reading = originalReadInfo
         ? `File read as ${label(originalReadInfo.encoding)} (${originalReadInfo.method}). `
         : 'Text input. ';
-      inputMeta.textContent = `${reading}Input download encoding: ${label(chosen)}. (All characters, including comments, are considered.)`;
+      inputMeta.textContent = originalBytes && originalText === value
+        ? `${reading}Input download: unchanged original file bytes. If edited, export will use ${label(chosen)}.`
+        : `${reading}Input download encoding: ${label(chosen)}. (All characters, including comments, are considered.)`;
     } catch (error) {
       inputMeta.textContent = `Input cannot be saved: ${error.message}`;
       node('downloadInput').disabled = true;
@@ -69,6 +72,7 @@
     if (!file) return;
     clearResult();
     originalText = null;
+    originalBytes = null;
     originalReadInfo = null;
     if (file.size > 10 * 1024 * 1024) {
       upload.value = '';
@@ -80,6 +84,7 @@
       const bytes = new Uint8Array(await file.arrayBuffer());
       const loaded = VbeCodec.readFileAuto(bytes);
       originalText = loaded.text;
+      originalBytes = bytes;
       originalReadInfo = loaded;
       fileName = (file.name.replace(/\.[^.]+$/, '') || 'script').replace(/[\\/:*?"<>|]/g, '_');
       input.value = loaded.text;
@@ -92,6 +97,7 @@
       }
     } catch (error) {
       originalText = null;
+      originalBytes = null;
       originalReadInfo = null;
       input.value = '';
       upload.value = '';
@@ -102,6 +108,7 @@
 
   input.addEventListener('input', () => {
     originalText = null;
+    originalBytes = null;
     originalReadInfo = null;
     upload.value = '';
     clearResult();
@@ -111,6 +118,19 @@
 
   function diagnosticText(report) {
     const lines = [];
+    if (report.interpretation?.method === 'legacy-byte-reinterpretation') {
+      lines.push(`VBE interpretation: ${report.interpretation.label} (automatic UTF-8 byte reinterpretation).`);
+      lines.push('Length and checksum match after reinterpretation. Original character meanings and Windows execution are NOT guaranteed.');
+    } else if (report.interpretation?.method === 'heuristic-legacy-byte-reinterpretation') {
+      lines.push(`VBE interpretation: HEURISTIC PREVIEW via ${report.interpretation.label}.`);
+      lines.push('Several code pages pass the length and checksum tests. This preview was selected based on a language-script signal and is NOT independently verified.');
+      lines.push(`Other matching interpretations: ${report.interpretation.candidates.join(' | ')}`);
+    } else if (report.interpretation?.method === 'ambiguous') {
+      lines.push('VBE interpretation: AMBIGUOUS. Multiple legacy interpretations passed integrity checks; none was selected.');
+      lines.push(`Matching alternatives: ${report.interpretation.candidates.join(' | ')}`);
+    } else if (report.interpretation) {
+      lines.push('VBE interpretation: as displayed (no byte reinterpretation).');
+    }
     for (const block of report.diagnostics || []) {
       lines.push(`Block ${block.index}: encoded length ${block.declaredLength === null ? 'invalid' : block.declaredLength} / observed ${block.actualLength} (${block.lengthMatch ? 'MATCH' : 'MISMATCH'}).`);
       lines.push(`Block ${block.index}: checksum ${block.declaredChecksum === null ? 'invalid' : block.declaredChecksum} / calculated ${block.calculatedChecksum} (${block.checksumMatch ? 'MATCH' : 'MISMATCH'}).`);
@@ -138,7 +158,7 @@
       const codecEncoding = target === 'ascii' ? 'utf-8' : target;
       result = mode === 'encode'
         ? VbeCodec.encodeText(text, codecEncoding)
-        : VbeCodec.decodeText(text, codecEncoding);
+        : VbeCodec.decodeTextAuto(text);
       const stored = VbeCodec.saveTextAuto(result.text);
       result.bytes = stored.bytes;
       result.encoding = stored.encoding;
@@ -158,7 +178,10 @@
         status(`Unverified recovery: ${result.blockCount} VBE block(s), ${result.warnings.length} warning(s). Recovered text is shown for inspection only.`, true);
         details.textContent = diagnosticText(result);
       } else {
-        status(`Decoded ${result.blockCount} VBE block(s). Format checks passed; Windows execution is untested.`);
+        const reinterpretation = result.interpretation?.method === 'legacy-byte-reinterpretation';
+        status(reinterpretation
+          ? `Recovered ${result.blockCount} VBE block(s) using automatic legacy-byte reinterpretation. Length and checksum match; character meaning and Windows execution are not guaranteed.`
+          : `Decoded ${result.blockCount} VBE block(s). Format checks passed; Windows execution is untested.`);
         details.textContent = diagnosticText(result);
       }
     } catch (error) {
@@ -214,10 +237,15 @@
       const text = sourceText();
       if (!text) throw new Error('Input is empty.');
       if (!text.includes('#@~^')) VbeCodec.validateSourceControls(text);
-      const stored = VbeCodec.saveTextAuto(text);
       const isVbe = text.includes('#@~^') && text.includes('^#~@');
-      download(stored.bytes, `${fileName}${isVbe ? '.vbe' : '.vbs'}`);
-      status(`Input saved as ${label(stored.encoding)}. This is a text-based export, not an unchanged original-byte copy.`);
+      if (originalBytes && originalText === text) {
+        download(originalBytes, `${fileName}${isVbe ? '.vbe' : '.vbs'}`);
+        status('Input downloaded byte-for-byte unchanged from the uploaded file.');
+      } else {
+        const stored = VbeCodec.saveTextAuto(text);
+        download(stored.bytes, `${fileName}${isVbe ? '.vbe' : '.vbs'}`);
+        status(`Input saved as ${label(stored.encoding)}.`);
+      }
     } catch (error) { status(`Download failed: ${error.message}`, true); }
   });
 
@@ -230,6 +258,7 @@
 
   function sample(text, name, notice) {
     originalText = text;
+    originalBytes = null;
     originalReadInfo = null;
     input.value = text;
     upload.value = '';
@@ -241,6 +270,7 @@
 
   node('clear').addEventListener('click', () => {
     originalText = null;
+    originalBytes = null;
     originalReadInfo = null;
     input.value = '';
     upload.value = '';

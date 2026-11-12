@@ -254,6 +254,136 @@ const VbeCodec = (() => {
       diagnostics, controls, terminalNulIgnored: hasTerminalNul, verified };
   }
 
+  // Decode the displayed Unicode text normally first. Only if its integrity
+  // checks fail, interpret its UTF-8 byte representation with legacy code pages.
+  // This handles VBE data whose original encoded-body metadata was computed
+  // after an ANSI/DBCS interpretation of the UTF-8 bytes. It is not a general
+  // purpose character-encoding detection algorithm.
+  function decodeTextAuto(source) {
+    let direct = null;
+    let directError = null;
+    try { direct = decodeText(source); }
+    catch (error) { directError = error; }
+    if (direct) {
+      direct.interpretation = {
+        method: 'direct',
+        label: 'Unicode text as displayed',
+        candidateCount: 0
+      };
+      if (direct.verified) return direct;
+    }
+    if (!/[\u0080-\uFFFF]/.test(source)) {
+      if (directError) throw directError;
+      return direct;
+    }
+
+    validateScalarText(source);
+    const bytes = new TextEncoder().encode(source.replace(/^\uFEFF/, ''));
+    const candidates = [];
+    const codePages = [
+      ['euc-kr', 'Korean (CP949-compatible browser decoder)'],
+      ['shift_jis', 'Japanese (Shift-JIS / CP932)'],
+      ['gbk', 'Chinese (GBK / CP936)'],
+      ['big5', 'Chinese (Big5 / CP950)'],
+      ['windows-1252', 'Western European (Windows-1252)']
+    ];
+    for (const [encoding, label] of codePages) {
+      try {
+        // Fatal decoding prevents silent U+FFFD replacement. Round-trip
+        // verification prevents accepting a noncanonical byte mapping.
+        const candidateText = decodeCharacters(bytes, encoding);
+        if (candidateText === source) continue;
+        if (!sameBytes(bytes, encodeCharacters(candidateText, encoding))) continue;
+        const report = decodeText(candidateText, encoding);
+        if (report.verified && report.controls.count === 0) {
+          candidates.push({ encoding, label, report });
+        }
+      } catch {
+        // Reject this code-page candidate without changing the input.
+      }
+    }
+
+    const distinct = [];
+    for (const item of candidates) {
+      const existing = distinct.find(candidate => candidate.report.text === item.report.text);
+      if (existing) existing.labels.push(item.label);
+      else distinct.push({ ...item, labels: [item.label] });
+    }
+    if (distinct.length === 1) {
+      const selected = distinct[0];
+      return {
+        ...selected.report,
+        interpretation: {
+          method: 'legacy-byte-reinterpretation',
+          label: selected.labels.join(' / '),
+          encoding: selected.encoding,
+          candidateCount: 1,
+          note: 'Encoded UTF-8 bytes were interpreted as a legacy code page to match the VBE length and checksum. Original language and Windows execution are not guaranteed.'
+        }
+      };
+    }
+    if (distinct.length > 1) {
+      if (!direct) {
+        throw new Error('Several alternate code pages decode successfully, but the direct VBE input could not be parsed. No source was selected.');
+      }
+      // Metadata alone cannot distinguish a Korean DBCS interpretation from
+      // a Chinese one: non-ASCII units are excluded from the VBE checksum.
+      // A strong script-language signal may select a diagnostic PREVIEW only.
+      // Such a preview is never marked verified and requires confirmation
+      // before it can be downloaded.
+      const languageCounts = text => {
+        let hangul = 0, kana = 0;
+        for (const character of text) {
+          const cp = character.codePointAt(0);
+          if (cp >= 0xac00 && cp <= 0xd7a3) hangul++;
+          else if ((cp >= 0x3040 && cp <= 0x30ff) ||
+                   (cp >= 0xff66 && cp <= 0xff9f)) kana++;
+        }
+        return { hangul, kana };
+      };
+      const annotated = distinct.map(candidate => ({
+        ...candidate, counts: languageCounts(candidate.report.text)
+      }));
+      const selected = annotated.find(candidate => {
+        const key = candidate.encoding === 'euc-kr' ? 'hangul'
+          : candidate.encoding === 'shift_jis' ? 'kana' : null;
+        if (!key || candidate.counts[key] < 8) return false;
+        return annotated.every(other => other === candidate ||
+          candidate.counts[key] >= (other.counts[key] * 3 + 4));
+      });
+      const names = annotated.map(candidate => candidate.labels.join(' / '));
+      if (selected) {
+        return {
+          ...selected.report,
+          verified: false,
+          warnings: [
+            `Multiple legacy code pages pass VBE integrity checks. Showing a heuristic ${selected.label} preview, which is NOT independently verified.`
+          ],
+          interpretation: {
+            method: 'heuristic-legacy-byte-reinterpretation',
+            label: selected.label,
+            encoding: selected.encoding,
+            candidateCount: distinct.length,
+            candidates: names,
+            note: 'The preview was selected from a strong language-script signal, not from a unique proof of the original code page. Confirm decoded text independently.'
+          }
+        };
+      }
+      direct.verified = false;
+      direct.warnings.push('Multiple legacy interpretations pass VBE integrity checks but recover different text. No interpretation was automatically selected.');
+      direct.interpretation = {
+        method: 'ambiguous',
+        label: 'Multiple interpretations',
+        candidateCount: distinct.length,
+        candidates: names
+      };
+    } else if (direct) {
+      direct.interpretation.candidateCount = 0;
+    }
+    if (directError) throw directError;
+    return direct;
+  }
+
   function encodeBytes(bytes, encoding = 'auto') {
     if (!(bytes instanceof Uint8Array)) throw new Error('Byte input is required.');
     const charset = normalizeEncoding(encoding, bytes);
@@ -548,14 +678,15 @@ const VbeCodec = (() => {
   }
 
   function validateVbe(source) {
-    const result = decodeText(source, chooseDownloadEncoding(source) === 'ascii' ? 'utf-8' : 'utf-16le');
+    const result = decodeTextAuto(source);
     return { blocks: result.blockCount, warnings: result.warnings,
       valid: result.verified, recoveredEncoding: chooseDownloadEncoding(result.text),
       diagnostics: result.diagnostics, controls: result.controls,
+      interpretation: result.interpretation,
       terminalNulIgnored: result.terminalNulIgnored };
   }
 
-  return Object.freeze({ encodeText, decodeText, encodeBytes, decodeBytes,
+  return Object.freeze({ encodeText, decodeText, decodeTextAuto, encodeBytes, decodeBytes,
     encodeCharacters, decodeCharacters, detectEncoding, validateScalarText,
     validateSourceControls, chooseDownloadEncoding, saveTextAuto,
     readFileAuto, validateVbe, sourceControlIssues });

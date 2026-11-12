@@ -35,7 +35,7 @@ function makeUi() {
   let nextUrl = 0;
   const blobs = new Map();
   const context = vm.createContext({
-    document, VbeCodec, Blob, console,
+    document, VbeCodec, Blob, console, Uint8Array, TextEncoder, TextDecoder,
     URL: {
       createObjectURL(blob) { const uri = 'blob:test-' + (++nextUrl); blobs.set(uri, blob); return uri; },
       revokeObjectURL() {},
@@ -109,4 +109,33 @@ test('UI exposes unverified diagnostic output but gates the download', async () 
   assert.equal(ui.get('download').disabled, false);
   await ui.get('download').emit('click');
   assert.match(ui.download().filename, /\.vbs$/);
+});
+
+test('UI can decode a valid legacy-byte interpretation without modifying the pasted input', async () => {
+  const ui = makeUi();
+  const charBytes = new TextEncoder().encode('黔ㆃ§');
+  const decodedAsGbk = new TextDecoder('gbk', { fatal: true }).decode(charBytes);
+  const source = `Option Explicit\r\n' ${decodedAsGbk}\r\nWScript.Echo "OK"\r\n`;
+  const encoded = VbeCodec.encodeText(source, 'gbk').text;
+  const legacyBytes = VbeCodec.encodeCharacters(encoded, 'gbk');
+  const displayed = new TextDecoder('utf-8', { fatal: true }).decode(legacyBytes);
+  ui.get('input').value = displayed;
+  await ui.get('input').emit('input');
+  await ui.get('decode').emit('click');
+  assert.equal(ui.get('output').value, source);
+  assert.equal(ui.get('input').value, displayed);
+  assert.match(ui.get('details').textContent, /byte reinterpretation/i);
+});
+
+test('UI Download Input preserves unchanged uploaded bytes exactly', async () => {
+  const ui = makeUi();
+  const source = 'Option Explicit\r\n\' 한글\r\n';
+  const rawBytes = VbeCodec.encodeCharacters(source, 'utf-16le', true);
+  const rawBuffer = rawBytes.buffer.slice(rawBytes.byteOffset, rawBytes.byteOffset + rawBytes.byteLength);
+  ui.get('upload').files = [{ name: 'byte-exact.vbs', size: rawBytes.length, async arrayBuffer() { return rawBuffer; } }];
+  await ui.get('upload').emit('change');
+  assert.match(ui.get('message').textContent, /File loaded/);
+  await ui.get('downloadInput').emit('click');
+  const blob = ui.blobs.get(ui.download().url);
+  assert.deepEqual(Buffer.from(await blob.arrayBuffer()), Buffer.from(rawBytes));
 });
